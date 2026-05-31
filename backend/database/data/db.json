@@ -1,0 +1,22 @@
+{
+  "departments": [
+    {
+      "id": "1",
+      "name": "Computer Science",
+      "description": "AI, Machine Learning, Systems, and Human-Computer Interaction."
+    },
+    {
+      "id": "2",
+      "name": "Electrical Engineering",
+      "description": "Signal Processing, Microelectronics, Robotics, and IoT."
+    },
+    {
+      "id": "3",
+      "name": "Bioengineering",
+      "description": "Computational Biology, Gene Editing, and Tissue Engineering."
+    }
+  ],
+  "papers": [],
+  "bookmarks": [],
+  "analytics": []
+}
