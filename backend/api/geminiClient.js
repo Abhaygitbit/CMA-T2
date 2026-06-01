@@ -22,30 +22,76 @@ if (API_KEY && API_KEY.trim() !== '') {
 }
 
 // -------------------------------------------------------------
-// PURE JS 768-DIMENSIONAL TERM HASH VECTORIZER (Zero-Dependencies RAG)
+// IMPROVED TF-IDF VECTORIZER (Zero-Dependencies RAG)
+// Maintains corpus statistics for better semantic matching
 // -------------------------------------------------------------
-export function generateLocalVector(text) {
+let corpusStats = {
+  totalDocs: 0,
+  docFrequency: {},
+  wordScores: {}
+};
+
+export function generateLocalVector(text, updateCorpus = false) {
   const vector = new Array(768).fill(0);
-  const words = text.toLowerCase().split(/[^\w]+/);
+  const words = text.toLowerCase().split(/[^\w]+/).filter(w => w.length > 2);
   
+  // Count word occurrences in this document
+  const wordCounts = {};
+  const uniqueWords = new Set();
   words.forEach(word => {
-    if (word.length <= 2) return; // skip stop words
+    wordCounts[word] = (wordCounts[word] || 0) + 1;
+    uniqueWords.add(word);
+  });
+  
+  // Update corpus statistics if requested (during document upload)
+  if (updateCorpus) {
+    corpusStats.totalDocs++;
+    uniqueWords.forEach(word => {
+      corpusStats.docFrequency[word] = (corpusStats.docFrequency[word] || 0) + 1;
+    });
+  }
+  
+  // Calculate TF-IDF for each word
+  const docLength = words.length || 1;
+  words.forEach(word => {
+    // Term Frequency
+    const tf = wordCounts[word] / docLength;
     
-    // Stable hash function
+    // Inverse Document Frequency (with smoothing to avoid zeros)
+    const df = corpusStats.docFrequency[word] || 1;
+    const idf = Math.log((corpusStats.totalDocs + 1) / (df + 1)) + 1;
+    
+    const tfidf = tf * idf;
+    
+    // Map to 768-dimensional index using stable hash
     let hash = 0;
     for (let i = 0; i < word.length; i++) {
       hash = word.charCodeAt(i) + ((hash << 5) - hash);
     }
-    
-    // Map to 768-dimensional index
     const index = Math.abs(hash) % 768;
-    vector[index] += 1;
+    vector[index] += tfidf;
   });
 
   // L2 Normalize vector
   const magnitude = Math.sqrt(vector.reduce((sum, val) => sum + (val * val), 0));
   if (magnitude === 0) return vector;
   return vector.map(val => val / magnitude);
+}
+
+// Keyword-based similarity for fallback/hybrid search
+export function calculateKeywordSimilarity(query, text) {
+  const queryTerms = query.toLowerCase().split(/[^\w]+/).filter(w => w.length > 0);
+  const textTerms = text.toLowerCase().split(/[^\w]+/).filter(w => w.length > 0);
+  
+  if (queryTerms.length === 0 || textTerms.length === 0) return 0;
+  
+  const textSet = new Set(textTerms);
+  const matches = queryTerms.filter(term => textSet.has(term)).length;
+  
+  // Jaccard-inspired similarity: matches / max(queryTerms, textTerms)
+  // More lenient than union-based to reward partial matches
+  const maxTerms = Math.max(queryTerms.length, textTerms.length);
+  return matches / maxTerms;
 }
 
 // Compute cosine similarity between two float arrays
@@ -61,6 +107,11 @@ export function cosineSimilarity(vecA, vecB) {
   }
   if (normA === 0 || normB === 0) return 0;
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Update corpus statistics during document upload (improve TF-IDF over time)
+export function updateCorpusStatistics(documentText) {
+  generateLocalVector(documentText, true);
 }
 
 // -------------------------------------------------------------
@@ -183,8 +234,8 @@ The text addresses key departmental guidelines, operational timelines, and stude
   },
 
   /**
-    * Processes a strict RAG query.
-    * Matches question against all chunks, extracts context, and prompts Gemini.
+    * Processes a strict RAG query with improved matching and fallback strategies.
+    * Uses hybrid search: vector similarity + keyword matching for better results.
     */
   answerQueryWithRAG: async (question, allChunks, userContext = null) => {
     if (!allChunks || allChunks.length === 0) {
@@ -194,70 +245,123 @@ The text addresses key departmental guidelines, operational timelines, and stude
     // 1. Generate query embedding
     const queryVector = await gemini.getEmbedding(question);
 
-    // 2. Score similarity on all chunks
+    // 2. Score all chunks with HYBRID SCORING (vector + keyword)
     const scoredChunks = allChunks.map(chunk => {
-      const score = cosineSimilarity(queryVector, chunk.embedding);
-      return { ...chunk, similarity: score };
+      // Vector similarity (semantic matching)
+      const vectorScore = cosineSimilarity(queryVector, chunk.embedding);
+      
+      // Keyword similarity (exact term matching)
+      const keywordScore = calculateKeywordSimilarity(question, chunk.chunk_text);
+      
+      // Combine scores: 50% vector, 50% keyword (balanced approach)
+      // Keyword matching is critical for exact phrase queries like "what is on monday"
+      const combinedScore = (vectorScore * 0.5) + (keywordScore * 0.5);
+      
+      return { 
+        ...chunk, 
+        vectorScore,
+        keywordScore,
+        similarity: combinedScore
+      };
     });
 
-    // 3. Sort and filter matching chunks (threshold 0.15 for word-hash vectors, 0.3 for real embeddings)
+    // 3. Sort by combined score
     const sortedMatches = scoredChunks
-      .filter(c => c.similarity > 0.15)
       .sort((a, b) => b.similarity - a.similarity);
 
-    // Take a wider set of chunks so Gemini has more surrounding context
-    const topChunks = sortedMatches.slice(0, 5);
+    // 4. Apply EXTREME thresholds - ANY keyword match = VALID match
+    // If query keywords appear in document, this MUST be used!
+    const strongMatches = sortedMatches.filter(c => c.keywordScore > 0.2 || c.similarity > 0.001);
+    const reasonableMatches = sortedMatches.filter(c => c.keywordScore > 0.1 || c.similarity > 0.0001);
+    const topChunks = sortedMatches.length > 0 
+      ? sortedMatches.slice(0, 15)  // Take up to 15 best matches
+      : [];
 
-    // Determine if we found relevant data
-    const hasContext = topChunks.length > 0 && topChunks[0].similarity > 0.18;
+    // Determine if we found relevant data - EXTREMELY PERMISSIVE
+    const hasStrongContext = topChunks.length > 0;
+    const hasAnyContext = topChunks.length > 0;
 
     const userProfile = userContext
       ? `Student profile: ${userContext.name || 'User'} (${userContext.role || 'user'}${userContext.department_id ? `, department ${userContext.department_id}` : ''})`
       : 'Student profile: Not provided';
     const userName = userContext?.name || extractDisplayName(userProfile);
 
-    if (hasContext) {
-      // Compile RAG context block
-      const contextStr = topChunks.map(c => `[From Document: "${c.doc_title}" (Category: ${c.doc_type})] \nContext Content: ${c.chunk_text}`).join('\n\n');
+    // 5. PRIMARY PATH: Strong semantic match found
+    if (hasStrongContext) {
+      const contextStr = topChunks.map(c => `[From Document: "${c.doc_title}" (${c.doc_type})] ${c.chunk_text}`).join('\n\n');
+
+      if (useRealAI && genAI) {
+        try {
+          const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+          const systemPrompt = `You are Campus Memory Assistant, a helpful AI that answers student questions about their courses using uploaded documents.
+
+CRITICAL RULES:
+1. ALWAYS cite the document name when answering from documents
+2. Use the exact information from the document provided
+3. Be concise and helpful
+4. Address the student by their name (${userName}) when possible
+5. Format times and dates clearly
+6. If asked about something not in the document, clearly say so`;
+
+          const userPrompt = `${userProfile}
+
+Document Information:
+${contextStr}
+
+Student Question: ${question}
+
+Answer the question using ONLY the information from the document above. If information is not in the document, say so clearly.`;
+          
+          const result = await model.generateContent({
+            contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+            systemInstruction: systemPrompt
+          });
+          
+          const response = await result.response;
+          const text = response.text();
+          return text;
+        } catch (err) {
+          console.error('Gemini API error:', err.message);
+          // Fallback to formatted document response
+          const matchedTexts = topChunks.map(c => c.chunk_text.trim()).join('\n');
+          return `Hello ${userName}! 👋 Here's what I found in your documents:\n\n${matchedTexts}`;
+        }
+      }
+      
+      // Simulated RAG answering (Pure JS matches) - backup only
+      const matchedTexts = topChunks.map(c => c.chunk_text.trim()).join('\n');
+      return `Hello ${userName}! 👋 According to **${topChunks[0].doc_title}**:\n\n${matchedTexts}`;
+    }
+
+    // 6. SECONDARY PATH: Weak match found (use with caution)
+    if (hasAnyContext && (topChunks[0].similarity > 0.001 || topChunks[0].keywordScore > 0.15)) {
+      console.log(`RAG match found (score: ${topChunks[0].similarity.toFixed(3)}, keyword: ${topChunks[0].keywordScore?.toFixed(3) || 'N/A'}). Using available context.`);
+      const contextStr = topChunks.map(c => `[From Document: "${c.doc_title}"] ${c.chunk_text}`).join('\n');
 
       if (useRealAI && genAI) {
         try {
           const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
           const prompt = `
-            You are the Campus Memory Assistant, a helpful AI tutor.
-            Use the college document context as the primary source.
-            If the context does not fully answer the question, provide a helpful general answer and clearly label any general knowledge.
-            
-            Strict Guidelines:
-            - Be concise, accurate, and helpful.
-            - Cite source documents naturally when using document facts.
-            - Do not invent campus-specific details that are not supported by the context.
-            - Address the user by name if the profile is available.
+            The user asked a question and we found a partial document match.
+            Use the provided context if relevant, but supplement with general knowledge.
             
             ${userProfile}
-
-            College Documents Context:
-            ${contextStr}
-            
-            Student Question:
-            ${question}
+            Context: ${contextStr}
+            Question: ${question}
           `;
-          
           const result = await model.generateContent(prompt);
           const response = await result.response;
           return response.text();
         } catch (err) {
-          console.warn('Real Gemini RAG answering failed, falling back to simulated RAG:', err);
+          console.warn('Weak context Gemini call failed:', err);
         }
       }
       
-      // Simulated RAG answering (Pure JS matches)
-      const matchedTexts = topChunks.map(c => `"${c.chunk_text.trim()}"`).join(' and ');
       const greeting = userName ? `${userName}, ` : '';
-      return `${greeting}according to the uploaded document **"${topChunks[0].doc_title}"** (${topChunks[0].doc_type}), the records indicate: ${matchedTexts}. If you want, I can also explain the general concept behind this in simpler terms.`;
+      return `${greeting}I found partial information in the documents: ${topChunks[0].chunk_text.substring(0, 200)}... However, I recommend checking the full document "${topChunks[0].doc_title}" for complete details.`;
     }
 
-    // 4. FALLBACK: If no relevant context is found in uploaded documents
+    // 7. FALLBACK: No relevant context found in documents
     const warning = `⚠️ *No strong document match found. Showing a general AI answer plus any nearby context.*\n\n`;
     
     if (useRealAI && genAI) {
@@ -305,9 +409,21 @@ function simulateGeneralKnowledgeResponse(question) {
   if (q.includes('capital') && q.includes('france')) {
     return "The capital of France is Paris. Paris is a major European city and a global center for art, fashion, gastronomy, and culture.";
   }
-  if (q.includes('exam') || q.includes('schedule') || q.includes('monday')) {
-    return "I am currently unable to find any uploaded exam schedules or timetables for Monday in the college document portal. Please request your course teacher or department administrator to upload the timetable.docx or notes.pdf file so I can retrieve the exact date.";
+  
+  // Better handling for schedule/timetable queries
+  if (q.includes('exam') || q.includes('schedule') || q.includes('timetable') || q.includes('monday') || q.includes('time')) {
+    return "For exam schedules, class timetables, and course timings, please check the documents uploaded by your course instructor in the Faculty Panel. The most current and accurate schedule information should be available there. If the document hasn't been uploaded yet, please request your course teacher to upload it.";
   }
   
-  return `Regarding your inquiry about "${question}", this is a general topic in its respective domain. For exact campus-specific deadlines, exam timetables, or notes, please make sure your course instructor uploads the official course documents into the Faculty Panel. Let me know if you would like me to explain the general academic concepts related to this topic!`;
+  // Handle lab/room/location queries
+  if (q.includes('lab') || q.includes('room') || q.includes('location') || q.includes('where')) {
+    return "For specific lab locations, room numbers, and classroom assignments, please refer to the documents uploaded by your faculty. These details are usually found in course syllabi or room assignment documents. If you can't find this information, please ask your course instructor to upload the relevant document.";
+  }
+  
+  // Handle course/curriculum queries
+  if (q.includes('course') || q.includes('subject') || q.includes('syllabus') || q.includes('requirement')) {
+    return "For detailed course information, requirements, and syllabus details, please check the documents uploaded by your course instructor. These documents contain essential information about course objectives, grading, and expectations. If the document is not available, please request your instructor to upload it to the Faculty Panel.";
+  }
+
+  return `Regarding your inquiry about "${question}", this is a general topic in its respective domain. For exact campus-specific deadlines, exam timetables, course details, or room assignments, please ensure your course instructor has uploaded the official course documents into the Faculty Panel. Let me know if you would like me to explain the general academic concepts related to this topic!`;
 }

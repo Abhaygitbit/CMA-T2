@@ -16,7 +16,12 @@ export default function StudentDashboard({ user }) {
   // RAG Chat
   const [chatOpen, setChatOpen] = useState(false);
   const [ragQuery, setRagQuery] = useState('');
-  const [ragResponse, setRagResponse] = useState('');
+  const [chatMessages, setChatMessages] = useState([
+    {
+      sender: 'ai',
+      text: `Hello ${user.name}! 👋 I'm your Campus AI Assistant. I can help you understand the documents your teachers have uploaded. Just ask me anything about your courses, timetables, assignments, or class schedules!`
+    }
+  ]);
   const [ragLoading, setRagLoading] = useState(false);
   const [ragError, setRagError] = useState('');
 
@@ -125,6 +130,13 @@ export default function StudentDashboard({ user }) {
       return;
     }
     
+    // Add user message to chat
+    const userMessage = {
+      sender: 'user',
+      text: ragQuery
+    };
+    setChatMessages(prev => [...prev, userMessage]);
+    
     setRagLoading(true);
     setRagError('');
     try {
@@ -149,13 +161,21 @@ export default function StudentDashboard({ user }) {
       }
       
       const data = await response.json();
-      setRagResponse(data.answer || 'No answer found for your query');
+      const aiResponse = {
+        sender: 'ai',
+        text: data.answer || 'No answer found for your query'
+      };
+      setChatMessages(prev => [...prev, aiResponse]);
       setRagQuery('');
     } catch (err) {
       console.error('RAG error:', err);
       const errorMsg = err.message || 'Error fetching AI response. Please try again.';
       setRagError(errorMsg);
-      setRagResponse('');
+      const errorMessage = {
+        sender: 'ai',
+        text: `❌ ${errorMsg}. Please try again.`
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
     } finally {
       setRagLoading(false);
     }
@@ -310,39 +330,60 @@ export default function StudentDashboard({ user }) {
           {/* Sidebar - RAG Chat & Bookmarks */}
           <div className="space-y-6">
             {/* RAG Chat */}
-            <div className="bg-white rounded-lg shadow p-4">
+            <div className="bg-white rounded-lg shadow p-4 flex flex-col h-96">
               <h2 className="font-bold text-lg mb-4">🤖 AI Assistant</h2>
-              <div className="space-y-4">
-                <textarea
-                  placeholder="Ask anything about the documents..."
+              
+              {/* Chat Messages */}
+              <div className="flex-1 overflow-y-auto mb-4 space-y-3 pr-2">
+                {chatMessages.map((msg, idx) => (
+                  <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-xs px-3 py-2 rounded-lg ${
+                      msg.sender === 'user' 
+                        ? 'bg-blue-500 text-white rounded-br-none' 
+                        : 'bg-gray-100 text-slate-900 rounded-bl-none'
+                    }`}>
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                    </div>
+                  </div>
+                ))}
+                {ragLoading && (
+                  <div className="flex justify-start">
+                    <div className="bg-gray-100 text-slate-900 px-3 py-2 rounded-lg rounded-bl-none">
+                      <div className="flex gap-1">
+                        <div className="w-2 h-2 bg-slate-600 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-slate-600 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
+                        <div className="w-2 h-2 bg-slate-600 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {ragError && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-2 mb-4 flex items-start gap-2 text-red-700">
+                  <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
+                  <p className="text-xs">{ragError}</p>
+                </div>
+              )}
+              
+              {/* Input Area */}
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Ask about documents..."
                   value={ragQuery}
                   onChange={(e) => setRagQuery(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleRAGQuery()}
-                  className="w-full p-3 border rounded-lg focus:outline-none focus:border-blue-500 resize-none text-slate-900 placeholder:text-slate-500 bg-white"
-                  rows="4"
+                  className="flex-1 p-2 border rounded-lg focus:outline-none focus:border-blue-500 text-slate-900 placeholder:text-slate-500 bg-white text-sm"
                   disabled={ragLoading}
                 />
                 <button
                   onClick={handleRAGQuery}
                   disabled={ragLoading}
-                  className="w-full bg-blue-100 text-slate-900 p-2 rounded-lg hover:bg-blue-200 disabled:bg-gray-300 flex items-center justify-center gap-2"
+                  className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 disabled:bg-gray-400 flex items-center justify-center"
                 >
-                  {ragLoading ? <Loader size={18} className="animate-spin" /> : <Send size={18} />}
-                  {ragLoading ? 'Thinking...' : 'Ask'}
+                  {ragLoading ? <Loader size={16} className="animate-spin" /> : <Send size={16} />}
                 </button>
-
-                {ragError && (
-                  <div className="bg-red-50 border border-red-200 rounded-lg p-3 flex items-start gap-2 text-red-700">
-                    <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-                    <p className="text-sm">{ragError}</p>
-                  </div>
-                )}
-
-                {ragResponse && (
-                  <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 text-slate-900">
-                    <p className="text-sm text-slate-900 leading-relaxed">{ragResponse}</p>
-                  </div>
-                )}
               </div>
             </div>
 

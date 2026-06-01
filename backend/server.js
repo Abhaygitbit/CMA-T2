@@ -6,7 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { db } from './database/database.js';
 import { processDocumentUpload, sanitizeExtractedText } from './api/pdfExtractor.js';
-import { gemini, cosineSimilarity } from './api/geminiClient.js';
+import { gemini, cosineSimilarity, updateCorpusStatistics } from './api/geminiClient.js';
 import { uploadToFirebase } from './database/firebaseUtils.js';
 
 dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '.env') });
@@ -240,6 +240,31 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
 
     // 1. Process document: extract text & generate overlapping 800-char chunks
     const parsed = await processDocumentUpload(req.file.buffer, req.file.originalname);
+    
+    // VALIDATE: Check if extracted text is acceptable quality
+    if (!parsed.rawText || parsed.rawText.trim().length < 20) {
+      return res.status(400).json({ 
+        error: 'Document extraction failed: Could not extract readable text from the uploaded file. ' +
+               'Please ensure the file is not corrupted, encrypted, or in an unsupported format. ' +
+               'Try uploading as TXT or DOCX instead of PDF.'
+      });
+    }
+    
+    // VALIDATE: Check if text looks like garbage (mostly non-ASCII characters)
+    const validChars = parsed.rawText.match(/[a-zA-Z0-9\s:.,;'"()\-\n]/g) || [];
+    const validRatio = validChars.length / parsed.rawText.length;
+    
+    if (validRatio < 0.4) {
+      return res.status(400).json({ 
+        error: `Document quality issue: Extracted text appears corrupted or unreadable (${(validRatio*100).toFixed(1)}% valid). ` +
+               'This may be an encrypted PDF or image-based PDF. Please provide a text-based or word document instead.'
+      });
+    }
+    
+    console.log(`Extraction quality check: ${(validRatio*100).toFixed(1)}% valid characters - PASSED`);
+    
+    // Update corpus statistics for TF-IDF vectorization
+    updateCorpusStatistics(parsed.rawText);
     
     // 2. Upload file to Firebase Storage (with fallback)
     let firebaseUpload;

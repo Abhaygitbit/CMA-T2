@@ -13,7 +13,13 @@ export async function extractTextFromBuffer(buffer, filename) {
   if (extension === 'docx') {
     try {
       const result = await mammoth.extractRawText({ buffer });
-      return result.value || '';
+      const text = result.value || '';
+      
+      // Validate extraction
+      if (!text || text.trim().length < 10) {
+        throw new Error('DOCX extraction produced empty or too short result');
+      }
+      return text;
     } catch (err) {
       console.error('Error parsing DOCX via Mammoth:', err);
       throw new Error(`DOCX text extraction failed: ${err.message}`);
@@ -21,7 +27,23 @@ export async function extractTextFromBuffer(buffer, filename) {
   } else if (extension === 'pdf') {
     try {
       const data = await pdf(buffer);
-      return data.text || '';
+      const text = data.text || '';
+      
+      // Validate PDF extraction
+      if (!text || text.trim().length < 10) {
+        throw new Error('PDF extraction produced empty or too short result');
+      }
+      
+      // Check if text looks valid (not mostly garbage characters)
+      const validChars = text.match(/[a-zA-Z0-9\s:.,;'"()\-]/g) || [];
+      const validRatio = validChars.length / text.length;
+      
+      if (validRatio < 0.5) {
+        console.warn(`PDF text quality is low (${(validRatio*100).toFixed(1)}% valid chars), using fallback extraction`);
+        throw new Error('PDF text appears corrupted or encrypted');
+      }
+      
+      return text;
     } catch (err) {
       console.warn('PDF parse failed, attempting ASCII-recovery fallback:', err.message);
 
@@ -72,6 +94,7 @@ export async function extractTextFromBuffer(buffer, filename) {
         const moreFiltered = cleaned.filter(s => !s.match(/\b(Type|Page|Contents|Resources|Font|Parent|MediaBox|Kids|Count)\b/gi));
         moreFiltered.sort((a, b) => b.length - a.length);
         const recovered = moreFiltered.slice(0, 40).join('\n\n').trim();
+        
         if (recovered && recovered.length > 30) {
           console.log('Recovered text from PDF via improved fallback (length:', recovered.length, ')');
           return recovered;
@@ -81,7 +104,7 @@ export async function extractTextFromBuffer(buffer, filename) {
       }
 
       // If recovery didn't produce anything useful, return an informative but non-throwing message
-      return `[[PDF text extraction failed: ${err.message}. The file may be partially corrupted; please re-upload a valid PDF or provide a TXT/DOCX version.]]`;
+      return `[[PDF text extraction failed: ${err.message}. The file may be partially corrupted or encrypted. Please re-upload a valid PDF or provide a TXT/DOCX version.]]`;
     }
   } else if (extension === 'txt') {
     // Detect BOM for UTF-16 (LE/BE) or null-bytes indicating UTF-16 and decode accordingly
@@ -110,34 +133,84 @@ export async function extractTextFromBuffer(buffer, filename) {
 }
 
 /**
- * Splits text into overlapping semantic chunks for vector indexing
+ * Splits text into overlapping semantic chunks using sentence boundaries
+ * @param {string} text 
+ * @param {number} targetChunkSize 
+ * @param {number} overlap 
+ * @returns {Array<string>} Array of text chunks
+ */
+export function generateChunks(text, targetChunkSize = 800, overlap = 150) {
+  // Clean double spaces/returns to preserve space
+  const cleanedText = text.replace(/\s+/g, ' ').trim();
+  if (cleanedText.length <= targetChunkSize) {
+    return [cleanedText];
+  }
+
+  // Split into sentences for better semantic boundaries
+  const sentences = cleanedText
+    .split(/(?<=[.!?])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  
+  if (sentences.length === 0) {
+    // Fallback to character-based chunking if no sentences detected
+    return generateCharacterChunks(cleanedText, targetChunkSize, overlap);
+  }
+
+  // Build chunks by accumulating sentences until we approach target size
+  const chunks = [];
+  let currentChunk = '';
+
+  for (const sentence of sentences) {
+    const potentialChunk = currentChunk ? `${currentChunk} ${sentence}` : sentence;
+    
+    if (potentialChunk.length <= targetChunkSize) {
+      currentChunk = potentialChunk;
+    } else {
+      // Current chunk is full, save it and start a new one
+      if (currentChunk.length > 50) { // Minimum chunk size
+        chunks.push(currentChunk);
+        
+        // Start new chunk with overlap from previous chunk
+        const sentenceCount = currentChunk.split(/(?<=[.!?])\s+/).length;
+        const overlapSentences = Math.max(1, Math.ceil(sentenceCount * (overlap / targetChunkSize)));
+        const overlapText = currentChunk
+          .split(/(?<=[.!?])\s+/)
+          .slice(-overlapSentences)
+          .join(' ');
+        
+        currentChunk = overlapText ? `${overlapText} ${sentence}` : sentence;
+      } else {
+        currentChunk = sentence;
+      }
+    }
+  }
+
+  // Add final chunk
+  if (currentChunk.length > 50) {
+    chunks.push(currentChunk);
+  }
+
+  return chunks.filter(c => c.trim().length > 10);
+}
+
+/**
+ * Fallback: Splits text into overlapping character-based chunks
  * @param {string} text 
  * @param {number} chunkSize 
  * @param {number} overlap 
  * @returns {Array<string>} Array of text chunks
  */
-export function generateChunks(text, chunkSize = 800, overlap = 150) {
-  // Clean double spaces/returns to preserve space
-  const cleanedText = text.replace(/\s+/g, ' ').trim();
-  if (cleanedText.length <= chunkSize) {
-    return [cleanedText];
-  }
-
+function generateCharacterChunks(text, chunkSize = 800, overlap = 150) {
   const chunks = [];
   let index = 0;
 
-  while (index < cleanedText.length) {
-    // Extract chunk slice
-    const chunk = cleanedText.substring(index, index + chunkSize);
+  while (index < text.length) {
+    const chunk = text.substring(index, index + chunkSize);
     chunks.push(chunk);
-    
-    // Shift index forward by chunkSize minus overlap
     index += (chunkSize - overlap);
 
-    // Escape infinite loop safeguard
-    if (chunkSize - overlap <= 0) {
-      break;
-    }
+    if (chunkSize - overlap <= 0) break;
   }
 
   return chunks.filter(c => c.trim().length > 10);
