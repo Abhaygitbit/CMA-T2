@@ -4,8 +4,7 @@
 const mockDB = {
   departments: [
     { id: '1', name: 'Computer Science', description: 'AI, Machine Learning, Systems, and Software Engineering.' },
-    { id: '2', name: 'Electrical Engineering', description: 'Microelectronics, Embedded Devices, Robotics, and IoT.' },
-    { id: '3', name: 'Bioengineering', description: 'Computational Genetics, Bioinformatics, and Tissue Engineering.' }
+    { id: '2', name: 'Electrical Engineering', description: 'Microelectronics, Embedded Devices, Robotics, and IoT.' }
   ],
   users: [
     {
@@ -51,7 +50,7 @@ const mockDB = {
 export const fallbackDB = {
   isUsingFallback: true,
   
-  getDepartments: async () => mockDB.departments,
+  getDepartments: async () => mockDB.departments.filter(d => d.id !== '3' && !/bioengineering/i.test(d.name || '')),
   
   getUserByEmail: async (email) => {
     return mockDB.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
@@ -124,6 +123,16 @@ export const fallbackDB = {
       ...doc,
       uploader: mockDB.users.find(u => u.id === doc.uploader_id)
     };
+  },
+
+  deleteDocument: async (id) => {
+    const docIndex = mockDB.documents.findIndex(d => d.id === id);
+    if (docIndex === -1) return false;
+    mockDB.analytics = mockDB.analytics.filter(a => a.document_id !== id);
+    mockDB.bookmarks = mockDB.bookmarks.filter(b => b.document_id !== id);
+    mockDB.document_chunks = mockDB.document_chunks.filter(c => c.document_id !== id);
+    mockDB.documents.splice(docIndex, 1);
+    return true;
   },
 
   getDocumentChunks: async (documentId) => {

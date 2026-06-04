@@ -122,3 +122,65 @@
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
+
+/* Premium card hover effects */
+.glass-card-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Status badge opacity fix */
+.bg-amber-500\/8 {
+  background-color: rgba(245, 158, 11, 0.08);
+}
+
+/* Bounce animation for chat dots */
+@keyframes bounce-delay {
+  0%, 80%, 100% { transform: scale(0.8); opacity: 0.6; }
+  40% { transform: scale(1); opacity: 1; }
+}
+
+/* Scrollbar styling for chat */
+.overflow-y-auto::-webkit-scrollbar {
+  width: 4px;
+}
+
+/* Table hover row highlight */
+.hover\:bg-white\/\[0\.02\]:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+/* Input placeholder color consistency */
+input::placeholder, textarea::placeholder {
+  color: rgba(148, 163, 184, 0.5);
+}
+
+/* Select arrow color */
+select option {
+  background-color: #0f172a;
+  color: #e2e8f0;
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, #10b981, #3b82f6);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Focus visible outline removal (handled by ring classes) */
+*:focus-visible {
+  outline: none;
+}
+
+/* Premium button active state */
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* Mobile safe spacing */
+@media (max-width: 640px) {
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+}

@@ -37,8 +37,13 @@ CREATE TABLE IF NOT EXISTS users (
   status TEXT,
   department_id TEXT REFERENCES departments(id),
   avatar TEXT,
+  phone TEXT,
   created_at TEXT
 );
+
+-- Add phone column to existing users table if it doesn't exist yet
+-- (Run this if you already have the users table without the phone column)
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
 
 -- Create documents table
 -- Stores metadata about uploaded documents

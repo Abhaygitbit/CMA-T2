@@ -4,7 +4,11 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { fallbackDB } from './fallbackDb.js';
 
-dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.env') });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -26,8 +30,7 @@ let useLocalFallback = process.env.USE_LOCAL_FALLBACK === 'true';
 // Default departments for seeding
 const defaultDepts = [
   { id: '1', name: 'Computer Science', description: 'AI, Machine Learning, Systems, and Software Engineering.' },
-  { id: '2', name: 'Electrical Engineering', description: 'Microelectronics, Embedded Devices, Robotics, and IoT.' },
-  { id: '3', name: 'Bioengineering', description: 'Computational Genetics, Bioinformatics, and Tissue Engineering.' }
+  { id: '2', name: 'Electrical Engineering', description: 'Microelectronics, Embedded Devices, Robotics, and IoT.' }
 ];
 
 const seedUsers = [
@@ -76,6 +79,12 @@ const initializeDatabase = async () => {
       console.log('Seeding departments...');
       await supabase.from('departments').insert(defaultDepts);
     }
+    try {
+      await supabase.from('departments').delete().eq('id', '3');
+      await supabase.from('departments').delete().ilike('name', '%bioengineering%');
+    } catch (deptCleanupErr) {
+      console.warn('Bioengineering department cleanup skipped:', deptCleanupErr.message);
+    }
 
     // Check if users exist
     const { data: users } = await supabase.from('users').select('id').limit(1);
@@ -97,7 +106,7 @@ const dbReal = {
   getDepartments: async () => {
     const { data, error } = await supabase.from('departments').select('*');
     if (error) throw error;
-    return data || [];
+    return (data || []).filter(d => d.id !== '3' && !/bioengineering/i.test(d.name || ''));
   },
 
   // ============ USERS / AUTHENTICATION ============
@@ -130,7 +139,7 @@ const dbReal = {
       email: user.email.toLowerCase(),
       password: user.password,
       role: user.role || 'student',
-      status: 'pending', // All signups start as pending approval
+      status: user.status || 'pending', // Allow override (e.g. admin creates auto-approved user)
       department_id: user.department_id || '1',
       avatar: user.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(user.name)}`,
       created_at: new Date().toISOString()
@@ -170,7 +179,7 @@ const dbReal = {
   },
 
   updateUserProfile: async (id, updates) => {
-    const allowedFields = ['name', 'password', 'avatar', 'department_id'];
+    const allowedFields = ['name', 'password', 'avatar', 'department_id', 'email', 'role', 'status', 'phone'];
     const fieldsToUpdate = Object.keys(updates).filter(k => allowedFields.includes(k));
     
     if (fieldsToUpdate.length === 0) return null;
@@ -180,13 +189,74 @@ const dbReal = {
       updateData[f] = updates[f];
     });
 
-    const { error } = await supabase
-      .from('users')
-      .update(updateData)
-      .eq('id', id);
-    
+    // Try with all fields first; if phone column is missing, retry without it
+    try {
+      const { error } = await supabase
+        .from('users')
+        .update(updateData)
+        .eq('id', id);
+      
+      if (error) throw error;
+    } catch (err) {
+      // If error is about missing 'phone' column, retry without it
+      if (err.message && (err.message.includes('phone') || err.message.includes('column'))) {
+        console.warn('phone column not found in users table, retrying without it:', err.message);
+        const { phone: _omit, ...updateDataWithoutPhone } = updateData;
+        if (Object.keys(updateDataWithoutPhone).length > 0) {
+          const { error: retryErr } = await supabase
+            .from('users')
+            .update(updateDataWithoutPhone)
+            .eq('id', id);
+          if (retryErr) throw retryErr;
+        }
+      } else {
+        throw err;
+      }
+    }
+
+    return dbReal.getUserById(id);
+  },
+
+  getAllUsers: async (filters = {}) => {
+    const { role, department_id } = filters;
+    let query = supabase.from('users').select('*').order('created_at', { ascending: false });
+    if (role) query = query.eq('role', role);
+    if (department_id) query = query.eq('department_id', department_id);
+    const { data, error } = await query;
     if (error) throw error;
-    return db.getUserById(id);
+    return (data || []).map(u => ({ ...u, password: undefined }));
+  },
+
+  deleteUser: async (id) => {
+    // Remove bookmarks first
+    await supabase.from('bookmarks').delete().eq('user_id', id);
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) throw error;
+    return true;
+  },
+
+  getUserStats: async () => {
+    const stats = { totalStudents: 0, totalTeachers: 0, pendingApprovals: 0, activeUsers: 0, byDepartment: [] };
+    try {
+      const { data: allUsers } = await supabase.from('users').select('role, status, department_id, departments(name)');
+      const users = allUsers || [];
+      stats.totalStudents = users.filter(u => u.role === 'student').length;
+      stats.totalTeachers = users.filter(u => u.role === 'teacher').length;
+      stats.pendingApprovals = users.filter(u => u.status === 'pending').length;
+      stats.activeUsers = users.filter(u => u.status === 'approved').length;
+      const deptMap = {};
+      users.forEach(u => {
+        const dn = u.departments?.name || 'Unknown';
+        if (!deptMap[dn]) deptMap[dn] = { students: 0, teachers: 0 };
+        if (u.role === 'student') deptMap[dn].students++;
+        if (u.role === 'teacher') deptMap[dn].teachers++;
+      });
+      stats.byDepartment = Object.entries(deptMap).map(([dept, c]) => ({ dept, ...c }));
+      return stats;
+    } catch (err) {
+      console.error('getUserStats error:', err);
+      return stats;
+    }
   },
 
   // ============ DOCUMENTS ============
@@ -277,11 +347,13 @@ const dbReal = {
       .eq('id', id);
 
     if (error) throw error;
-    return db.getDocumentById(id);
+    return dbReal.getDocumentById(id);
   },
 
   deleteDocument: async (id) => {
-    // Cascade delete chunks
+    // Remove dependent records first so Supabase foreign keys do not block deletion.
+    await supabase.from('analytics').delete().eq('document_id', id);
+    await supabase.from('bookmarks').delete().eq('document_id', id);
     await supabase.from('document_chunks').delete().eq('document_id', id);
     
     const { error } = await supabase

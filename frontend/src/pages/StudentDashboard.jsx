@@ -1,411 +1,427 @@
-import React, { useState, useEffect } from 'react';
-import { Search, BookmarkPlus, BookmarkCheck, FileText, Filter, Send, Loader, AlertCircle, CheckCircle } from 'lucide-react';
-import { showToast } from '../utils/toast.js';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Search, BookmarkPlus, BookmarkCheck, FileText, Filter, Send, Loader2,
+  AlertCircle, Download, GraduationCap, BookOpen, Clock, Star, Cpu,
+  User, TrendingUp, Calendar, ChevronRight, X, MessageSquare, Sparkles,
+  RefreshCw
+} from 'lucide-react';
+
+const FILE_TYPE_COLORS = {
+  notes: 'text-blue-400 bg-blue-500/10 border-blue-500/20',
+  timetable: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
+  notice: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+  assignment: 'text-purple-400 bg-purple-500/10 border-purple-500/20',
+  exam: 'text-red-400 bg-red-500/10 border-red-500/20',
+  research: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+};
+
+const FILE_TYPE_ICONS = {
+  notes: '📝', timetable: '📅', notice: '📢',
+  assignment: '📋', exam: '📊', research: '🔬'
+};
+
+function SkeletonCard() {
+  return (
+    <div className="glass-card rounded-2xl p-5 border border-white/5 space-y-3 animate-pulse">
+      <div className="h-3 w-20 bg-white/5 rounded shimmer" />
+      <div className="h-4 w-3/4 bg-white/5 rounded shimmer" />
+      <div className="h-3 w-1/2 bg-white/5 rounded shimmer" />
+    </div>
+  );
+}
 
 export default function StudentDashboard({ user }) {
   const [documents, setDocuments] = useState([]);
   const [bookmarks, setBookmarks] = useState([]);
+  const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedDept, setSelectedDept] = useState('all');
   const [selectedType, setSelectedType] = useState('all');
-  const [departments, setDepartments] = useState([]);
-  const [error, setError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-  
-  // RAG Chat
-  const [chatOpen, setChatOpen] = useState(false);
-  const [ragQuery, setRagQuery] = useState('');
-  const [chatMessages, setChatMessages] = useState([
-    {
-      sender: 'ai',
-      text: `Hello ${user.name}! 👋 I'm your Campus AI Assistant. I can help you understand the documents your teachers have uploaded. Just ask me anything about your courses, timetables, assignments, or class schedules!`
-    }
+  const [activeTab, setActiveTab] = useState('documents'); // documents | bookmarks | chat
+
+  // Chat
+  const [messages, setMessages] = useState([
+    { sender: 'ai', text: `Hello ${user.name}! 👋 I'm your Campus AI Assistant powered by Gemini. Ask me anything about your uploaded course documents — timetables, assignments, exam schedules, and more!`, ts: new Date() }
   ]);
-  const [ragLoading, setRagLoading] = useState(false);
-  const [ragError, setRagError] = useState('');
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef(null);
 
-  // Fetch documents and bookmarks
+  // Toast
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
+
   useEffect(() => {
-    fetchDocuments();
-    fetchBookmarks();
-    fetchDepartments();
-  }, []);
+    Promise.all([
+      fetch(`/api/documents?dept=${encodeURIComponent(user.department_id)}`).then(r => r.json()).catch(() => []),
+      fetch(`/api/bookmarks?user_id=${user.id}&department_id=${encodeURIComponent(user.department_id)}`).then(r => r.json()).catch(() => []),
+      fetch('/api/departments').then(r => r.json()).catch(() => [])
+    ]).then(([docs, bmarks, depts]) => {
+      setDocuments(docs || []);
+      setBookmarks(bmarks || []);
+      setDepartments(depts || []);
+    }).finally(() => setLoading(false));
+  }, [user.id, user.department_id]);
 
-  const fetchDocuments = async () => {
-    try {
-      setError('');
-      const response = await fetch('/api/documents');
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch documents: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setDocuments(data || []);
-    } catch (err) {
-      const errorMsg = err.message || 'Error fetching documents. Please refresh the page.';
-      console.error('Error fetching documents:', err);
-      setError(errorMsg);
-      setDocuments([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, chatLoading]);
 
-  const fetchBookmarks = async () => {
-    try {
-      const response = await fetch(`/api/bookmarks?user_id=${user.id}`);
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch bookmarks: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setBookmarks(data || []);
-    } catch (err) {
-      console.error('Error fetching bookmarks:', err);
-      // Don't show error for bookmarks as it's not critical
-      setBookmarks([]);
-    }
-  };
+  const filteredDocs = documents.filter(doc => {
+    const matchSearch = !searchQuery || doc.title.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchType = selectedType === 'all' || doc.file_type === selectedType;
+    return matchSearch && matchType;
+  });
 
-  const fetchDepartments = async () => {
-    try {
-      const response = await fetch('/api/departments');
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch departments: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setDepartments(data || []);
-    } catch (err) {
-      console.error('Error fetching departments:', err);
-      setDepartments([]);
-    }
-  };
-
-  // Toggle bookmark
   const toggleBookmark = async (docId) => {
     const isBookmarked = bookmarks.some(b => b.id === docId);
     try {
       if (isBookmarked) {
-        const response = await fetch(`/api/bookmarks/${docId}?user_id=${user.id}`, { method: 'DELETE' });
-        
-        if (!response.ok) {
-          throw new Error('Failed to remove bookmark');
-        }
-        
+        await fetch(`/api/bookmarks/${docId}?user_id=${user.id}`, { method: 'DELETE' });
         setBookmarks(prev => prev.filter(b => b.id !== docId));
-        setSuccessMessage('Bookmark removed');
-        setTimeout(() => setSuccessMessage(''), 2000);
+        showToast('Bookmark removed');
       } else {
-        const response = await fetch('/api/bookmarks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+        const r = await fetch('/api/bookmarks', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ user_id: user.id, document_id: docId })
         });
-        
-        if (!response.ok) {
-          throw new Error('Failed to add bookmark');
+        if (r.ok) {
+          const bmark = documents.find(d => d.id === docId);
+          if (bmark) setBookmarks(prev => [...prev, bmark]);
+          showToast('Bookmarked!');
         }
-        
-        fetchBookmarks();
-        setSuccessMessage('Bookmark added!');
-        setTimeout(() => setSuccessMessage(''), 2000);
       }
-    } catch (err) {
-      console.error('Bookmark error:', err);
-      const errorMsg = err.message || 'Error updating bookmark. Please try again.';
-      setError(errorMsg);
-      setTimeout(() => setError(''), 3000);
-    }
+    } catch { showToast('Error updating bookmark', 'error'); }
   };
 
-  // RAG Query
-  const handleRAGQuery = async () => {
-    if (!ragQuery.trim()) {
-      setRagError('Please enter a question');
-      return;
-    }
-    
-    // Add user message to chat
-    const userMessage = {
-      sender: 'user',
-      text: ragQuery
-    };
-    setChatMessages(prev => [...prev, userMessage]);
-    
-    setRagLoading(true);
-    setRagError('');
+  const sendChatMessage = async () => {
+    const q = chatInput.trim();
+    if (!q || chatLoading) return;
+    setChatInput('');
+    setMessages(prev => [...prev, { sender: 'user', text: q, ts: new Date() }]);
+    setChatLoading(true);
     try {
-      const response = await fetch('/api/rag/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const r = await fetch('/api/rag/search', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          query: ragQuery,
-          department_id: selectedDept === 'all' ? null : selectedDept,
-          user_context: {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            department_id: user.department_id
-          }
+          query: q,
+          department_id: user.department_id,
+          user_context: { id: user.id, name: user.name, email: user.email, role: user.role, department_id: user.department_id }
         })
       });
-      
-      if (!response.ok) {
-        throw new Error('Failed to get response from AI assistant');
-      }
-      
-      const data = await response.json();
-      const aiResponse = {
+      const data = await r.json();
+      setMessages(prev => [...prev, {
         sender: 'ai',
-        text: data.answer || 'No answer found for your query'
-      };
-      setChatMessages(prev => [...prev, aiResponse]);
-      setRagQuery('');
-    } catch (err) {
-      console.error('RAG error:', err);
-      const errorMsg = err.message || 'Error fetching AI response. Please try again.';
-      setRagError(errorMsg);
-      const errorMessage = {
-        sender: 'ai',
-        text: `❌ ${errorMsg}. Please try again.`
-      };
-      setChatMessages(prev => [...prev, errorMessage]);
+        text: data.answer || 'Sorry, I could not find an answer.',
+        source: data.sourceDocument,
+        ts: new Date()
+      }]);
+    } catch {
+      setMessages(prev => [...prev, { sender: 'ai', text: '❌ Connection error. Please ensure the backend is running.', ts: new Date() }]);
     } finally {
-      setRagLoading(false);
+      setChatLoading(false);
     }
   };
 
-  // Filter documents
-  let filteredDocs = documents.filter(doc => {
-    const matchSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchDept = selectedDept === 'all' || doc.department_id === selectedDept;
-    const matchType = selectedType === 'all' || doc.file_type === selectedType;
-    return matchSearch && matchDept && matchType;
-  });
+  const deptName = departments.find(d => d.id === user.department_id)?.name || 'N/A';
+  const docTypes = ['all', 'notes', 'timetable', 'notice', 'assignment', 'exam', 'research'];
 
-  const documentTypes = ['notes', 'timetable', 'notice', 'assignment', 'exam', 'research'];
+  const statCards = [
+    { label: 'Documents', value: documents.length, icon: FileText, color: 'from-blue-500/20 to-blue-600/10', iconColor: 'text-blue-400' },
+    { label: 'Bookmarked', value: bookmarks.length, icon: Star, color: 'from-amber-500/20 to-amber-600/10', iconColor: 'text-amber-400' },
+    { label: 'Department', value: deptName.split(' ')[0], icon: GraduationCap, color: 'from-emerald-500/20 to-emerald-600/10', iconColor: 'text-emerald-400' },
+    { label: 'AI Chats', value: messages.filter(m => m.sender === 'user').length, icon: MessageSquare, color: 'from-purple-500/20 to-purple-600/10', iconColor: 'text-purple-400' },
+  ];
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen text-slate-900">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900">📚 Learning Hub</h1>
-          <p className="text-slate-700 mt-2">Welcome back, {user.name}! Explore course materials.</p>
+    <div className="p-4 md:p-6 space-y-6">
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-20 right-4 z-50 px-4 py-3 rounded-xl shadow-2xl text-sm font-semibold flex items-center gap-2 animate-fade-in-up ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-emerald-500/90 text-white'}`}>
+          {toast.type === 'error' ? <AlertCircle className="w-4 h-4" /> : <Star className="w-4 h-4" />}
+          {toast.msg}
         </div>
+      )}
 
-        {/* Global Error Message */}
-        {error && (
-          <div className="mb-6 bg-red-50 border border-red-300 rounded-lg p-4 flex items-start gap-3 text-red-700">
-            <AlertCircle size={20} className="mt-0.5 flex-shrink-0" />
-            <div>
-              <p className="font-medium">Error</p>
-              <p className="text-sm mt-1">{error}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Success Message */}
-        {successMessage && (
-          <div className="mb-6 bg-green-50 border border-green-300 rounded-lg p-4 flex items-start gap-3 text-green-700">
-            <CheckCircle size={20} className="mt-0.5 flex-shrink-0" />
-            <p className="text-sm font-medium">{successMessage}</p>
-          </div>
-        )}
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Content */}
-          <div className="lg:col-span-2">
-            {/* Search Bar */}
-            <div className="mb-6 bg-white rounded-lg shadow p-4">
-              <div className="flex items-center gap-2 border-2 border-blue-300 rounded-lg px-4 py-2">
-                <Search size={20} className="text-blue-600" />
-                <input
-                  type="text"
-                  placeholder="Search documents..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="flex-1 outline-none"
-                />
-              </div>
-            </div>
-
-            {/* Filters */}
-            <div className="mb-6 bg-white rounded-lg shadow p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <Filter size={18} />
-                <span className="font-semibold">Filters</span>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                {/* Department Filter */}
-                <select
-                  value={selectedDept}
-                  onChange={(e) => setSelectedDept(e.target.value)}
-                  className="p-2 border rounded-lg focus:outline-none focus:border-blue-500"
-                >
-                  <option value="all">All Departments</option>
-                  {departments.map(dept => (
-                    <option key={dept.id} value={dept.id}>{dept.name}</option>
-                  ))}
-                </select>
-
-                {/* Type Filter */}
-                <select
-                  value={selectedType}
-                  onChange={(e) => setSelectedType(e.target.value)}
-                  className="p-2 border rounded-lg focus:outline-none focus:border-blue-500"
-                >
-                  <option value="all">All Types</option>
-                  {documentTypes.map(type => (
-                    <option key={type} value={type}>
-                      {type.charAt(0).toUpperCase() + type.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Documents List */}
-            <div className="space-y-4">
-              {loading ? (
-                <div className="text-center py-12">
-                  <Loader className="animate-spin mx-auto mb-2" />
-                  <p>Loading documents...</p>
-                </div>
-              ) : filteredDocs.length > 0 ? (
-                filteredDocs.map(doc => (
-                  <div key={doc.id} className="bg-white rounded-lg shadow p-4 hover:shadow-md transition">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          <FileText size={20} className="text-blue-600" />
-                          <h3 className="text-lg font-semibold text-slate-900">{doc.title}</h3>
-                          <span className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded">
-                            {doc.file_type}
-                          </span>
-                        </div>
-                        <p className="text-slate-700 text-sm mb-2">{doc.uploader_name} • {new Date(doc.created_at).toLocaleDateString()}</p>
-                        <a
-                          href={doc.storage_path}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-blue-600 hover:underline text-sm"
-                        >
-                          📥 Download
-                        </a>
-                      </div>
-                      <button
-                        onClick={() => toggleBookmark(doc.id)}
-                        className={`p-2 rounded-lg transition ${
-                          bookmarks.some(b => b.id === doc.id)
-                            ? 'bg-yellow-100 text-yellow-600'
-                            : 'bg-gray-100 text-slate-900 hover:bg-gray-200'
-                        }`}
-                        title={bookmarks.some(b => b.id === doc.id) ? 'Remove bookmark' : 'Add bookmark'}
-                      >
-                        {bookmarks.some(b => b.id === doc.id) ? (
-                          <BookmarkCheck size={20} />
-                        ) : (
-                          <BookmarkPlus size={20} />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="bg-white rounded-lg shadow p-12 text-center">
-                  <FileText size={48} className="mx-auto text-slate-300 mb-4" />
-                  <p className="text-slate-700">No documents found</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Sidebar - RAG Chat & Bookmarks */}
-          <div className="space-y-6">
-            {/* RAG Chat */}
-            <div className="bg-white rounded-lg shadow p-4 flex flex-col h-96">
-              <h2 className="font-bold text-lg mb-4">🤖 AI Assistant</h2>
-              
-              {/* Chat Messages */}
-              <div className="flex-1 overflow-y-auto mb-4 space-y-3 pr-2">
-                {chatMessages.map((msg, idx) => (
-                  <div key={idx} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-xs px-3 py-2 rounded-lg ${
-                      msg.sender === 'user' 
-                        ? 'bg-blue-500 text-white rounded-br-none' 
-                        : 'bg-gray-100 text-slate-900 rounded-bl-none'
-                    }`}>
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
-                    </div>
-                  </div>
-                ))}
-                {ragLoading && (
-                  <div className="flex justify-start">
-                    <div className="bg-gray-100 text-slate-900 px-3 py-2 rounded-lg rounded-bl-none">
-                      <div className="flex gap-1">
-                        <div className="w-2 h-2 bg-slate-600 rounded-full animate-bounce"></div>
-                        <div className="w-2 h-2 bg-slate-600 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                        <div className="w-2 h-2 bg-slate-600 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {ragError && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-2 mb-4 flex items-start gap-2 text-red-700">
-                  <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
-                  <p className="text-xs">{ragError}</p>
-                </div>
-              )}
-              
-              {/* Input Area */}
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Ask about documents..."
-                  value={ragQuery}
-                  onChange={(e) => setRagQuery(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && handleRAGQuery()}
-                  className="flex-1 p-2 border rounded-lg focus:outline-none focus:border-blue-500 text-slate-900 placeholder:text-slate-500 bg-white text-sm"
-                  disabled={ragLoading}
-                />
-                <button
-                  onClick={handleRAGQuery}
-                  disabled={ragLoading}
-                  className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 disabled:bg-gray-400 flex items-center justify-center"
-                >
-                  {ragLoading ? <Loader size={16} className="animate-spin" /> : <Send size={16} />}
-                </button>
-              </div>
-            </div>
-
-            {/* Bookmarks Summary */}
-            <div className="bg-white rounded-lg shadow p-4">
-              <h2 className="font-bold text-lg mb-4">⭐ Saved ({bookmarks.length})</h2>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
-                {bookmarks.length > 0 ? (
-                  bookmarks.map(bookmark => (
-                    <div key={bookmark.id} className="p-2 bg-gray-50 rounded text-sm text-slate-900">
-                      <p className="font-medium text-slate-900">{bookmark.title}</p>
-                      <p className="text-xs text-slate-700">{bookmark.file_type}</p>
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-slate-700 text-sm">No saved documents yet</p>
-                )}
-              </div>
-            </div>
-          </div>
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-black text-white">Learning Hub</h1>
+          <p className="text-slate-400 text-sm mt-1">Welcome back, <span className="text-emerald-400 font-semibold">{user.name}</span> · {deptName}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {user.avatar && <img src={user.avatar} alt={user.name} className="w-10 h-10 rounded-xl object-cover border border-white/10" />}
         </div>
       </div>
+
+      {/* Stat Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {statCards.map(({ label, value, icon: Icon, color, iconColor }) => (
+          <div key={label} className={`glass-card rounded-2xl p-4 border border-white/5 bg-gradient-to-br ${color} relative overflow-hidden`}>
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs text-slate-400 font-medium">{label}</p>
+                <p className="text-2xl font-black text-white mt-1 leading-none">{value}</p>
+              </div>
+              <div className={`w-9 h-9 rounded-xl bg-slate-900/50 flex items-center justify-center`}>
+                <Icon className={`w-5 h-5 ${iconColor}`} />
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Tab Navigation */}
+      <div className="flex gap-1 p-1 bg-slate-900/60 rounded-2xl border border-white/[0.06] w-fit">
+        {[
+          { id: 'documents', label: 'Documents', icon: FileText },
+          { id: 'bookmarks', label: 'Saved', icon: Star },
+          { id: 'chat', label: 'AI Chat', icon: Cpu },
+        ].map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all ${activeTab === id ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}
+          >
+            <Icon className="w-4 h-4" />
+            <span className="hidden sm:inline">{label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* DOCUMENTS TAB */}
+      {activeTab === 'documents' && (
+        <div className="space-y-5">
+          {/* Search + Filter */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <input
+                type="text" placeholder="Search documents..." value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                className="w-full bg-slate-900/60 border border-white/10 rounded-xl pl-10 pr-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 transition-all"
+              />
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {docTypes.map(type => (
+                <button
+                  key={type}
+                  onClick={() => setSelectedType(type)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all ${selectedType === type ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'text-slate-400 border-white/10 hover:border-white/20 hover:text-slate-200'}`}
+                >
+                  {type === 'all' ? 'All' : `${FILE_TYPE_ICONS[type]} ${type.charAt(0).toUpperCase() + type.slice(1)}`}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Document Grid */}
+          {loading ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {[...Array(6)].map((_, i) => <SkeletonCard key={i} />)}
+            </div>
+          ) : filteredDocs.length === 0 ? (
+            <div className="glass-card rounded-2xl p-16 text-center border border-white/5">
+              <FileText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">No documents found</p>
+              <p className="text-slate-500 text-sm mt-1">
+                {searchQuery ? 'Try a different search term' : 'Your teachers have not uploaded any documents yet'}
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredDocs.map(doc => {
+                const isBookmarked = bookmarks.some(b => b.id === doc.id);
+                const typeClass = FILE_TYPE_COLORS[doc.file_type] || FILE_TYPE_COLORS.notes;
+                return (
+                  <div key={doc.id} className="glass-card glass-card-hover rounded-2xl p-5 border border-white/5 flex flex-col gap-3">
+                    <div className="flex items-start justify-between">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${typeClass}`}>
+                        {FILE_TYPE_ICONS[doc.file_type]} {doc.file_type}
+                      </span>
+                      <button
+                        onClick={() => toggleBookmark(doc.id)}
+                        className={`p-2 rounded-xl transition-all ${isBookmarked ? 'bg-amber-500/15 text-amber-400 border border-amber-500/25' : 'text-slate-500 hover:text-amber-400 hover:bg-amber-500/10'}`}
+                        title={isBookmarked ? 'Remove bookmark' : 'Bookmark'}
+                      >
+                        {isBookmarked ? <BookmarkCheck className="w-4 h-4" /> : <BookmarkPlus className="w-4 h-4" />}
+                      </button>
+                    </div>
+
+                    <div>
+                      <h3 className="font-bold text-white text-sm leading-snug line-clamp-2">{doc.title}</h3>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-slate-400">
+                        <span className="flex items-center gap-1"><User className="w-3 h-3" />{doc.uploader_name || 'Faculty'}</span>
+                        <span className="flex items-center gap-1"><Calendar className="w-3 h-3" />{new Date(doc.created_at).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 mt-auto pt-2 border-t border-white/5">
+                      <a
+                        href={`/api/documents/${doc.id}/download?department_id=${encodeURIComponent(user.department_id)}`} target="_blank" rel="noopener noreferrer"
+                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 text-xs font-bold border border-emerald-500/20 transition-all"
+                      >
+                        <Download className="w-3.5 h-3.5" />View / Download
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* BOOKMARKS TAB */}
+      {activeTab === 'bookmarks' && (
+        <div className="space-y-4">
+          {bookmarks.length === 0 ? (
+            <div className="glass-card rounded-2xl p-16 text-center border border-white/5">
+              <Star className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">No bookmarks yet</p>
+              <p className="text-slate-500 text-sm mt-1">Bookmark documents from the Documents tab for quick access</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {bookmarks.map(doc => {
+                const typeClass = FILE_TYPE_COLORS[doc.file_type] || FILE_TYPE_COLORS.notes;
+                return (
+                  <div key={doc.id} className="glass-card glass-card-hover rounded-2xl p-5 border border-white/5 flex flex-col gap-3">
+                    <div className="flex items-start justify-between">
+                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border ${typeClass}`}>
+                        {FILE_TYPE_ICONS[doc.file_type]} {doc.file_type}
+                      </span>
+                      <button
+                        onClick={() => toggleBookmark(doc.id)}
+                        className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-all"
+                        title="Remove bookmark"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <h3 className="font-bold text-white text-sm leading-snug">{doc.title}</h3>
+                    <a href={`/api/documents/${doc.id}/download?department_id=${encodeURIComponent(user.department_id)}`} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 text-xs font-bold border border-emerald-500/20 transition-all">
+                      <Download className="w-3.5 h-3.5" />Open Document
+                    </a>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AI CHAT TAB */}
+      {activeTab === 'chat' && (
+        <div className="glass-card rounded-2xl border border-white/5 flex flex-col h-[600px]">
+          {/* Chat Header */}
+          <div className="p-4 border-b border-white/[0.06] flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-500 to-blue-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+                <Cpu className="w-5 h-5 text-white animate-glow-pulse" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white">Gemini AI Assistant</h3>
+                <p className="text-[11px] text-emerald-400 font-medium">RAG-powered · Grounded in uploaded documents</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setMessages([{ sender: 'ai', text: `Hello ${user.name}! 👋 How can I help you today?`, ts: new Date() }])}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"
+              title="Clear chat"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Quick prompts */}
+          <div className="px-4 pt-3 flex gap-2 flex-wrap">
+            {['What is in the timetable?', 'Show upcoming exams', 'What assignments are pending?', 'Explain CNN'].map(prompt => (
+              <button
+                key={prompt}
+                disabled={chatLoading}
+                onClick={async () => {
+                  setChatInput('');
+                  setMessages(prev => [...prev, { sender: 'user', text: prompt, ts: new Date() }]);
+                  setChatLoading(true);
+                  try {
+                    const r = await fetch('/api/rag/search', {
+                      method: 'POST', headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        query: prompt,
+                        department_id: user.department_id,
+                        user_context: { id: user.id, name: user.name, role: user.role, department_id: user.department_id }
+                      })
+                    });
+                    const data = await r.json();
+                    setMessages(prev => [...prev, { sender: 'ai', text: data.answer || 'No answer found.', source: data.sourceDocument, ts: new Date() }]);
+                  } catch {
+                    setMessages(prev => [...prev, { sender: 'ai', text: 'Connection error. Please try again.', ts: new Date() }]);
+                  } finally {
+                    setChatLoading(false);
+                  }
+                }}
+                className="px-2.5 py-1 rounded-lg bg-slate-800/60 hover:bg-slate-800 text-[11px] text-slate-400 hover:text-slate-200 border border-white/10 transition-all disabled:opacity-50"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.map((msg, i) => (
+              <div key={i} className={`flex items-start gap-3 ${msg.sender === 'user' ? 'flex-row-reverse' : ''}`}>
+                <div className={`w-8 h-8 rounded-xl flex-shrink-0 flex items-center justify-center border ${msg.sender === 'ai' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
+                  {msg.sender === 'ai' ? <Cpu className="w-4 h-4" /> : <User className="w-4 h-4" />}
+                </div>
+                <div className={`max-w-[80%] space-y-1`}>
+                  <div className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${msg.sender === 'ai' ? 'bg-slate-800/60 border border-white/5 text-slate-200' : 'bg-emerald-500/15 border border-emerald-500/20 text-emerald-100'}`}>
+                    <p className="whitespace-pre-wrap">{msg.text}</p>
+                  </div>
+                  {msg.source && msg.source !== 'Unknown' && (
+                    <p className="text-[10px] text-slate-500 px-1">📎 From: {msg.source}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {chatLoading && (
+              <div className="flex items-start gap-3">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 flex-shrink-0">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                </div>
+                <div className="bg-slate-800/60 border border-white/5 rounded-2xl px-4 py-3 flex gap-1 items-center">
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" />
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input */}
+          <div className="p-4 border-t border-white/[0.06]">
+            <div className="flex gap-2">
+              <input
+                type="text" value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChatMessage()}
+                placeholder="Ask about your timetable, exams, assignments..."
+                className="flex-1 bg-slate-900/60 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 transition-all"
+                disabled={chatLoading}
+              />
+              <button
+                onClick={sendChatMessage}
+                disabled={chatLoading || !chatInput.trim()}
+                className="px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-600 text-slate-950 font-bold transition-all shadow-lg shadow-emerald-500/20"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

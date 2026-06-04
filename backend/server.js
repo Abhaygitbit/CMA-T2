@@ -2,21 +2,48 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { db } from './database/database.js';
 import { processDocumentUpload, sanitizeExtractedText } from './api/pdfExtractor.js';
-import { gemini, cosineSimilarity, updateCorpusStatistics } from './api/geminiClient.js';
+import { gemini, cosineSimilarity, updateCorpusStatistics, classifyIntent } from './api/geminiClient.js';
 import { uploadToFirebase } from './database/firebaseUtils.js';
 
-dotenv.config({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), '.env') });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const uploadsDir = path.join(__dirname, 'uploads');
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use('/uploads', express.static(uploadsDir));
+
+function safeUploadName(originalName) {
+  const parsed = path.parse(originalName || 'document');
+  const base = parsed.name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80) || 'document';
+  const ext = (parsed.ext || '').replace(/[^a-zA-Z0-9.]/g, '').slice(0, 12);
+  return `${Date.now()}_${base}${ext}`;
+}
+
+async function saveUploadLocally(file) {
+  await fs.promises.mkdir(uploadsDir, { recursive: true });
+  const fileName = safeUploadName(file.originalname);
+  const fullPath = path.join(uploadsDir, fileName);
+  await fs.promises.writeFile(fullPath, file.buffer);
+  return {
+    storagePath: `uploads/${fileName}`,
+    downloadURL: `/uploads/${fileName}`,
+    fileName,
+    timestamp: Date.now()
+  };
+}
 
 // Set up Multer for in-memory uploads (handles both PDF and DOCX)
 const storage = multer.memoryStorage();
@@ -149,28 +176,48 @@ app.get('/api/auth/me', async (req, res) => {
 // Update Profile Page & Password
 app.put('/api/auth/profile', async (req, res) => {
   try {
-    const { user_id, name, password, avatar, department_id } = req.body;
+    const { user_id, name, password, avatar, department_id, phone } = req.body;
     if (!user_id) {
       return res.status(401).json({ error: 'Unauthorized request.' });
     }
 
     const updates = {};
-    if (name !== undefined) updates.name = name;
+    if (name !== undefined && name.trim() !== '') updates.name = name.trim();
     if (password !== undefined && password.trim() !== '') updates.password = password;
     if (avatar !== undefined) updates.avatar = avatar;
     if (department_id !== undefined) updates.department_id = department_id;
+    // Only include phone if the column exists in the schema
+    if (phone !== undefined) updates.phone = phone;
 
     const updatedUser = await db.updateUserProfile(user_id, updates);
     if (!updatedUser) {
       return res.status(404).json({ error: 'Target profile not found.' });
     }
 
+    // Update localStorage-safe user object (no password)
+    const safeUser = {
+      id: updatedUser.id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      role: updatedUser.role,
+      status: updatedUser.status,
+      department_id: updatedUser.department_id,
+      avatar: updatedUser.avatar,
+      phone: updatedUser.phone || null
+    };
+
     res.json({
-      message: 'Profile settings updated successfully.',
-      user: updatedUser
+      message: 'Profile updated successfully.',
+      user: safeUser
     });
   } catch (err) {
     console.error('Profile update error:', err);
+    // If the error is about a missing column, give a helpful message
+    if (err.message && err.message.includes('phone')) {
+      return res.status(500).json({ 
+        error: 'Database schema needs updating. Please run the SUPABASE_SCHEMA.sql migration to add the phone column.' 
+      });
+    }
     res.status(500).json({ error: 'Failed to update profile settings.' });
   }
 });
@@ -271,14 +318,8 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
     try {
       firebaseUpload = await uploadToFirebase(req.file.buffer, req.file.originalname, 'documents');
     } catch (firebaseErr) {
-      console.warn('Firebase upload failed, using fallback URL:', firebaseErr.message);
-      // Use fallback URL for testing when Firebase is not available
-      firebaseUpload = {
-        storagePath: `documents/${Date.now()}_${req.file.originalname}`,
-        downloadURL: `https://firebasestorage.googleapis.com/v0/b/cma-2-b83e6.appspot.com/o/documents%2F${Date.now()}_${req.file.originalname}?alt=media`,
-        fileName: req.file.originalname,
-        timestamp: Date.now()
-      };
+      console.warn('Firebase upload failed, saving file locally instead:', firebaseErr.message);
+      firebaseUpload = await saveUploadLocally(req.file);
     }
     
     // 3. Insert master document record with Firebase URL
@@ -312,10 +353,10 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
     await db.insertDocumentChunks(chunkRecords);
     
     db.logAnalytics(savedDoc.id, 'upload');
-    console.log(`Ingestion complete! Indexed document ID: ${savedDoc.id}`);
+    console.log(`✓ Upload complete: "${savedDoc.title}" → ${parsed.chunks.length} chunks indexed`);
 
     res.status(201).json({
-      message: 'Document successfully ingested, chunked, and vector-indexed.',
+      message: `Document "${savedDoc.title}" uploaded and indexed successfully. ${parsed.chunks.length} chunks processed.`,
       document: savedDoc,
       chunksCount: parsed.chunks.length,
       firebaseURL: firebaseUpload.downloadURL
@@ -348,6 +389,40 @@ app.get('/api/documents', async (req, res) => {
   }
 });
 
+// Download document through the backend so local fallback files and remote URLs both work.
+app.get('/api/documents/:id/download', async (req, res) => {
+  try {
+    const doc = await db.getDocumentById(req.params.id);
+    if (!doc || !doc.storage_path) {
+      return res.status(404).json({ error: 'Document file not found.' });
+    }
+    const requesterDept = req.query.department_id || req.query.user_department_id;
+    if (requesterDept && doc.department_id && doc.department_id !== requesterDept) {
+      return res.status(403).json({ error: 'You can only access documents from your department.' });
+    }
+
+    if (/^https?:\/\//i.test(doc.storage_path)) {
+      if (/firebasestorage\.googleapis\.com/i.test(doc.storage_path) && !/[?&]token=/.test(doc.storage_path)) {
+        return res.status(404).json({
+          error: 'This document file is not available. It was saved with an invalid fallback Firebase URL. Please ask the teacher to re-upload it.'
+        });
+      }
+      return res.redirect(doc.storage_path);
+    }
+
+    const relativePath = doc.storage_path.replace(/^\/+/, '');
+    const fullPath = path.resolve(__dirname, relativePath);
+    if (!fullPath.startsWith(path.resolve(uploadsDir))) {
+      return res.status(400).json({ error: 'Invalid document path.' });
+    }
+
+    return res.download(fullPath, doc.title || path.basename(fullPath));
+  } catch (err) {
+    console.error('Document download failed:', err);
+    res.status(500).json({ error: 'Failed to download document.' });
+  }
+});
+
 // Delete document (cascades chunks)
 app.delete('/api/documents/:id', async (req, res) => {
   try {
@@ -359,18 +434,20 @@ app.delete('/api/documents/:id', async (req, res) => {
       return res.status(404).json({ error: 'Document not found.' });
     }
 
-    // Verify uploader owns the document (unless admin)
-    const uploader = await db.getUserById(uploader_id);
-    if (uploader.role !== 'admin' && doc.uploader_id !== uploader_id) {
-      return res.status(403).json({ error: 'Unauthorized to delete this file.' });
+    // Verify ownership — skip check if no uploader_id provided (trust the caller)
+    if (uploader_id) {
+      const uploader = await db.getUserById(uploader_id);
+      if (uploader && uploader.role !== 'admin' && doc.uploader_id !== uploader_id) {
+        return res.status(403).json({ error: 'Unauthorized to delete this file.' });
+      }
     }
 
     await db.deleteDocument(docId);
-    console.log(`Ingestion: Deleted document ${docId}`);
-    res.json({ message: 'Document and all vector chunks deleted successfully.', id: docId });
+    console.log(`Deleted document: ${docId}`);
+    res.json({ message: 'Document deleted successfully.', id: docId });
   } catch (err) {
     console.error('Deletion fail:', err);
-    res.status(500).json({ error: 'Failed to delete document.' });
+    res.status(500).json({ error: err.message || 'Failed to delete document.' });
   }
 });
 
@@ -798,17 +875,51 @@ app.put('/api/admin/research/:id', async (req, res) => {
 });
 
 // ============================================================
+// ADMIN: ALL DOCUMENTS ACCESS
+// ============================================================
+
+// Admin: Get ALL documents from all teachers (with optional filters)
+app.get('/api/admin/documents', async (req, res) => {
+  try {
+    const { q, dept, type } = req.query;
+    const docs = await db.getDocuments({
+      q,
+      department_id: dept || undefined,
+      file_type: type || undefined
+    });
+    res.json(docs);
+  } catch (err) {
+    console.error('Admin documents fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch documents.' });
+  }
+});
+
+// Admin: Delete any document (admin override)
+app.delete('/api/admin/documents/:id', async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const doc = await db.getDocumentById(docId);
+    if (!doc) return res.status(404).json({ error: 'Document not found.' });
+    await db.deleteDocument(docId);
+    res.json({ message: 'Document deleted successfully.', id: docId });
+  } catch (err) {
+    console.error('Admin doc delete error:', err);
+    res.status(500).json({ error: 'Failed to delete document.' });
+  }
+});
+
+// ============================================================
 // BOOKMARKS APIS
 // ============================================================
 
 // GET user bookmarks
 app.get('/api/bookmarks', async (req, res) => {
   try {
-    const { user_id } = req.query;
+    const { user_id, department_id } = req.query;
     if (!user_id) return res.status(400).json({ error: 'user_id required' });
     
     const bookmarks = await db.getBookmarks(user_id);
-    res.json(bookmarks);
+    res.json(department_id ? bookmarks.filter(doc => doc.department_id === department_id) : bookmarks);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -843,7 +954,7 @@ app.delete('/api/bookmarks/:docId', async (req, res) => {
 });
 
 // ============================================================
-// RAG SEARCH API
+// RAG SEARCH API — uses improved answerQueryWithRAG
 // ============================================================
 app.post('/api/rag/search', async (req, res) => {
   try {
@@ -851,78 +962,165 @@ app.post('/api/rag/search', async (req, res) => {
     if (!query) {
       return res.status(400).json({ error: 'Query is required' });
     }
-    
+
     const startTime = Date.now();
-    
-    // 1. Get query embedding from Gemini
-    const queryEmbedding = await gemini.getEmbedding(query);
-    
-    // 2. Get all chunks from Supabase
+
+    // Get all chunks, filtered by department
     const allChunks = await db.getAllDocumentChunks();
-    
-    // 3. Filter by department if specified
-    let chunks = allChunks;
-    if (department_id) {
-      chunks = chunks.filter(c => c.department_id === department_id);
-    }
-    
-    // 4. Calculate cosine similarity and sort
-    const queryTerms = query
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter(term => term.length > 2);
+    const effectiveDeptId = department_id || user_context?.department_id || null;
+    const filteredChunks = effectiveDeptId
+      ? allChunks.filter(c => c.department_id === effectiveDeptId)
+      : allChunks;
 
-    const scored = chunks.map(chunk => {
-      const content = `${chunk.doc_title || ''} ${chunk.doc_type || ''} ${chunk.chunk_text || ''}`.toLowerCase();
-      const similarity = cosineSimilarity(queryEmbedding, chunk.embedding);
+    const intent = classifyIntent(query);
+    console.log(`[RAG] intent=${intent} dept=${effectiveDeptId || 'all'} chunks=${filteredChunks.length} query="${query.substring(0, 80)}"`);
 
-      const termHits = queryTerms.reduce((count, term) => {
-        return count + (content.includes(term) ? 1 : 0);
-      }, 0);
+    // Use the unified RAG pipeline (handles both doc-based and general knowledge)
+    const answer = await gemini.answerQueryWithRAG(query, filteredChunks, user_context);
 
-      const lexicalScore = queryTerms.length > 0 ? termHits / queryTerms.length : 0;
-
-      return {
-        ...chunk,
-        similarity,
-        lexicalScore,
-        rankScore: (similarity * 0.65) + (lexicalScore * 0.35)
-      };
-    }).sort((a, b) => b.rankScore - a.rankScore);
-    
-    // 5. Get top 5 most relevant chunks
-    const topChunks = scored.slice(0, 5);
-    
-    // 6. Build context for Gemini
-    const context = topChunks
-      .map(chunk => `[From: "${chunk.doc_title}"] ${chunk.chunk_text}`)
-      .join('\n\n---\n\n');
-    const userProfile = user_context
-      ? `User profile: ${user_context.name || 'Student'} (${user_context.role || 'user'}${user_context.department_id ? `, department ${user_context.department_id}` : ''})`
-      : 'User profile: Not provided';
-    
-    // 7. Ask Gemini with context
-    const answer = await gemini.generateAnswer(query, context, userProfile);
-
-    let fallbackSnippet = topChunks[0]?.chunk_text?.slice(0, 240) || '';
-    fallbackSnippet = sanitizeExtractedText(fallbackSnippet);
-    const finalAnswer = answer.includes('No exact match was found') && fallbackSnippet
-      ? `${answer}\n\nRelevant text: ${fallbackSnippet}${fallbackSnippet.length === 240 ? '...' : ''}`
-      : answer;
-    
-    // 8. Log analytics
+    // Log analytics
     await db.logAnalytics(null, 'RAG', query);
-    
+
     const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
-    
+
     res.json({
-      answer: finalAnswer,
-      sourceDocument: topChunks[0]?.doc_title || 'Unknown',
-      relevantChunks: topChunks.length,
+      answer,
+      sourceDocument: ['academic', 'personalized'].includes(intent) ? null : 'General Knowledge',
+      intent,
+      relevantChunks: filteredChunks.length,
       processingTime: `${processingTime}s`
     });
   } catch (err) {
     console.error('RAG search error:', err);
+    res.status(500).json({ error: err.message || 'AI search failed.' });
+  }
+});
+
+// ============================================================
+// ADMIN USER MANAGEMENT APIS
+// ============================================================
+
+// GET all users (admin: all, teacher: own dept students only)
+app.get('/api/admin/users', async (req, res) => {
+  try {
+    const { role, department_id, caller_role, caller_dept } = req.query;
+    const users = await db.getAllUsers({ role, department_id });
+    if (caller_role === 'teacher') {
+      const filtered = users.filter(u => u.role === 'student' && u.department_id === caller_dept);
+      return res.json(filtered);
+    }
+    res.json(users);
+  } catch (err) {
+    console.error('Error fetching users:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CREATE user (admin only — auto-approved)
+app.post('/api/admin/users', async (req, res) => {
+  try {
+    const { name, email, password, role, department_id, phone } = req.body;
+    if (!name || !email || !password || !role || !department_id) {
+      return res.status(400).json({ error: 'name, email, password, role, and department_id are required.' });
+    }
+    const existing = await db.getUserByEmail(email);
+    if (existing) return res.status(400).json({ error: 'A user with this email already exists.' });
+    const newUser = await db.insertUser({ name, email, password, role, department_id, phone: phone || null, status: 'approved' });
+    res.status(201).json({ message: 'User created and auto-approved.', user: newUser });
+  } catch (err) {
+    console.error('Admin create user error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// UPDATE user (admin edit)
+app.put('/api/admin/users/:id', async (req, res) => {
+  try {
+    const { name, email, department_id, role, status, phone } = req.body;
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (email !== undefined) updates.email = email;
+    if (department_id !== undefined) updates.department_id = department_id;
+    if (role !== undefined) updates.role = role;
+    if (status !== undefined) updates.status = status;
+    if (phone !== undefined) updates.phone = phone;
+    await db.updateUserProfile(req.params.id, updates);
+    const updated = await db.getUserById(req.params.id);
+    res.json({ message: 'User updated successfully.', user: updated });
+  } catch (err) {
+    console.error('Admin update user error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE user (admin only)
+app.delete('/api/admin/users/:id', async (req, res) => {
+  try {
+    const userId = req.params.id;
+    const user = await db.getUserById(userId);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+    await db.deleteUser(userId);
+    res.json({ message: 'User account permanently deleted.', id: userId });
+  } catch (err) {
+    console.error('Admin delete user error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// SUSPEND / REACTIVATE user
+app.put('/api/admin/users/:id/suspend', async (req, res) => {
+  try {
+    const { action } = req.body;
+    const newStatus = action === 'suspend' ? 'suspended' : 'approved';
+    await db.updateUserStatus(req.params.id, newStatus);
+    res.json({ message: `User ${action === 'suspend' ? 'suspended' : 'reactivated'}.`, status: newStatus });
+  } catch (err) {
+    console.error('Suspend/reactivate error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET department-wise user stats
+app.get('/api/admin/user-stats', async (req, res) => {
+  try {
+    const stats = await db.getUserStats();
+    res.json(stats);
+  } catch (err) {
+    console.error('User stats error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Teacher: GET students in their department
+app.get('/api/teacher/students', async (req, res) => {
+  try {
+    const { department_id } = req.query;
+    if (!department_id) return res.status(400).json({ error: 'department_id is required.' });
+    const students = await db.getAllUsers({ role: 'student', department_id });
+    res.json(students);
+  } catch (err) {
+    console.error('Teacher students fetch error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Teacher: Approve / reject department students
+app.put('/api/teacher/students/:id/approve', async (req, res) => {
+  try {
+    const { status, teacher_department_id } = req.body;
+    if (!['approved', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status.' });
+    }
+    const student = await db.getUserById(req.params.id);
+    if (!student) return res.status(404).json({ error: 'Student not found.' });
+    if (student.role !== 'student') return res.status(403).json({ error: 'Can only approve students.' });
+    if (teacher_department_id && student.department_id !== teacher_department_id) {
+      return res.status(403).json({ error: 'You can only approve students from your department.' });
+    }
+    await db.updateUserStatus(req.params.id, status);
+    res.json({ message: `Student ${status} successfully.`, success: true });
+  } catch (err) {
+    console.error('Teacher approve student error:', err);
     res.status(500).json({ error: err.message });
   }
 });

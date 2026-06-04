@@ -1,395 +1,596 @@
 import React, { useState, useEffect } from 'react';
-import { Check, X, BarChart3, Users, FileText, AlertCircle, Loader, RefreshCw, CheckCircle } from 'lucide-react';
-import { showToast } from '../utils/toast.js';
+import {
+  Users, FileText, BarChart3, Check, X, Loader2, AlertCircle, CheckCircle,
+  RefreshCw, Search, Filter, Plus, Edit2, Trash2, Shield, Building2,
+  UserCheck, UserX, Lock, Unlock, GraduationCap, ChevronDown, Eye,
+  TrendingUp, Activity, Clock, Mail, Phone, Download, Settings, Folder
+} from 'lucide-react';
+import ProfileSettings from '../components/ProfileSettings.jsx';
 
-export default function AdminDashboard({ user }) {
-  const [activeTab, setActiveTab] = useState('approvals'); // 'approvals', 'analytics'
-  const [pendingUsers, setPendingUsers] = useState([]);
-  const [analyticsData, setAnalyticsData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [departments, setDepartments] = useState([]);
+const STATUS_BADGE = {
+  approved: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
+  pending: 'bg-amber-500/15 text-amber-400 border-amber-500/20',
+  rejected: 'bg-red-500/15 text-red-400 border-red-500/20',
+  suspended: 'bg-slate-500/15 text-slate-400 border-slate-500/20',
+};
+
+const ROLE_BADGE = {
+  admin: 'bg-red-500/15 text-red-400 border-red-500/20',
+  teacher: 'bg-blue-500/15 text-blue-400 border-blue-500/20',
+  student: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
+};
+
+// Add/Edit User Modal
+function UserModal({ mode, user: editUser, departments, onClose, onSuccess }) {
+  const [form, setForm] = useState({
+    name: editUser?.name || '',
+    email: editUser?.email || '',
+    password: '',
+    role: editUser?.role || 'student',
+    department_id: editUser?.department_id || (departments[0]?.id || ''),
+    phone: editUser?.phone || '',
+    status: editUser?.status || 'approved',
+  });
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-  const [actionLoading, setActionLoading] = useState(null);
-  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    fetchPendingUsers();
-    fetchAnalytics();
-    fetchDepartments();
-  }, []);
-
-  const fetchPendingUsers = async () => {
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!form.name || !form.email || (!editUser && !form.password) || !form.role || !form.department_id) {
+      setError('Name, email, role, and department are required.'); return;
+    }
+    setLoading(true); setError('');
     try {
-      setError('');
-      const response = await fetch('/api/admin/pending-users');
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch pending users: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setPendingUsers(data || []);
-    } catch (err) {
-      const errorMsg = err.message || 'Error fetching pending users. Please try again.';
-      console.error('Error fetching pending users:', err);
-      setError(errorMsg);
-      setPendingUsers([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const fetchAnalytics = async () => {
-    try {
-      const response = await fetch('/api/admin/analytics');
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch analytics: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setAnalyticsData(data || {});
-    } catch (err) {
-      console.error('Error fetching analytics:', err);
-      setAnalyticsData({});
-    }
-  };
-
-  const fetchDepartments = async () => {
-    try {
-      const response = await fetch('/api/departments');
-      
-      if (!response.ok) {
-        throw new Error(`Failed to fetch departments: ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      setDepartments(data || []);
-    } catch (err) {
-      console.error('Error fetching departments:', err);
-      setDepartments([]);
-    }
-  };
-
-  const handleApprove = async (userId, userName) => {
-    if (!window.confirm(`Approve user ${userName}?`)) {
-      return;
-    }
-
-    setActionLoading(userId);
-    try {
-      const response = await fetch(`/api/admin/users/${userId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'approved' })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to approve user');
-      }
-
-      setSuccessMessage(`${userName} has been approved!`);
-      setTimeout(() => setSuccessMessage(''), 2000);
-      fetchPendingUsers();
-    } catch (err) {
-      console.error('Error approving user:', err);
-      const errorMsg = err.message || 'Error approving user. Please try again.';
-      setError(errorMsg);
-      setTimeout(() => setError(''), 3000);
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleReject = async (userId, userName) => {
-    if (!window.confirm(`Reject user ${userName}? This action cannot be undone.`)) {
-      return;
-    }
-
-    setActionLoading(userId);
-    try {
-      const response = await fetch(`/api/admin/users/${userId}/approve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'rejected' })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to reject user');
-      }
-
-      setSuccessMessage(`${userName} has been rejected.`);
-      setTimeout(() => setSuccessMessage(''), 2000);
-      fetchPendingUsers();
-    } catch (err) {
-      console.error('Error rejecting user:', err);
-      const errorMsg = err.message || 'Error rejecting user. Please try again.';
-      setError(errorMsg);
-      setTimeout(() => setError(''), 3000);
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await fetchPendingUsers();
-      setSuccessMessage('Data refreshed');
-      setTimeout(() => setSuccessMessage(''), 1500);
-    } catch (err) {
-      console.error('Refresh error:', err);
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  const getDepartmentName = (deptId) => {
-    return departments.find(d => d.id === deptId)?.name || 'Unknown';
+      const url = mode === 'add' ? '/api/admin/users' : `/api/admin/users/${editUser.id}`;
+      const method = mode === 'add' ? 'POST' : 'PUT';
+      const body = { ...form };
+      if (mode === 'edit' && !form.password) delete body.password;
+      const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const data = await r.json();
+      if (r.ok) { onSuccess(data.user); onClose(); }
+      else setError(data.error || 'Operation failed.');
+    } catch { setError('Connection error. Please try again.'); }
+    finally { setLoading(false); }
   };
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="max-w-7xl mx-auto">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">⚙️ Admin Control Panel</h1>
-          <p className="text-gray-600 mt-2">Manage users, approvals, and system analytics</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+      <div className="bg-slate-900 border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl space-y-5 animate-fade-in-up">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-white">{mode === 'add' ? 'Add New User' : 'Edit User'}</h2>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-white/5 text-slate-400 transition-colors"><X className="w-4 h-4" /></button>
         </div>
-
-        {/* Global Error Message */}
-        {error && (
-          <div className="mb-6 bg-red-50 border border-red-300 rounded-lg p-4 flex items-start gap-3 text-red-700">
-            <AlertCircle size={20} className="mt-0.5 flex-shrink-0" />
+        {error && <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs">{error}</div>}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {[
+            { label: 'Full Name', key: 'name', type: 'text', placeholder: 'John Doe' },
+            { label: 'Email', key: 'email', type: 'email', placeholder: 'email@example.com' },
+            { label: mode === 'add' ? 'Password' : 'New Password (leave blank to keep)', key: 'password', type: 'password', placeholder: '••••••••' },
+            { label: 'Phone (optional)', key: 'phone', type: 'tel', placeholder: '+1234567890' },
+          ].map(f => (
+            <div key={f.key}>
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">{f.label}</label>
+              <input type={f.type} value={form[f.key]} onChange={e => setForm(p => ({ ...p, [f.key]: e.target.value }))}
+                placeholder={f.placeholder}
+                className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 transition-all" />
+            </div>
+          ))}
+          <div className="grid grid-cols-2 gap-3">
             <div>
-              <p className="font-medium">Error</p>
-              <p className="text-sm mt-1">{error}</p>
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">Role</label>
+              <select value={form.role} onChange={e => setForm(p => ({ ...p, role: e.target.value }))}
+                className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-slate-100 focus:outline-none appearance-none">
+                <option value="student">Student</option>
+                <option value="teacher">Teacher</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">Department</label>
+              <select value={form.department_id} onChange={e => setForm(p => ({ ...p, department_id: e.target.value }))}
+                className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-slate-100 focus:outline-none appearance-none">
+                {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
             </div>
           </div>
-        )}
-
-        {/* Success Message */}
-        {successMessage && (
-          <div className="mb-6 bg-green-50 border border-green-300 rounded-lg p-4 flex items-start gap-3 text-green-700">
-            <CheckCircle size={20} className="mt-0.5 flex-shrink-0" />
-            <p className="text-sm font-medium">{successMessage}</p>
+          {mode === 'edit' && (
+            <div>
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">Status</label>
+              <select value={form.status} onChange={e => setForm(p => ({ ...p, status: e.target.value }))}
+                className="w-full bg-slate-950/60 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-slate-100 focus:outline-none appearance-none">
+                {['approved', 'pending', 'rejected', 'suspended'].map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button type="button" onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-bold transition-all border border-white/10">Cancel</button>
+            <button type="submit" disabled={loading} className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 disabled:from-slate-700 disabled:to-slate-700 text-white text-sm font-bold transition-all flex items-center justify-center gap-2">
+              {loading ? <><Loader2 className="w-4 h-4 animate-spin" />Saving...</> : <><Check className="w-4 h-4" />{mode === 'add' ? 'Create User' : 'Save Changes'}</>}
+            </button>
           </div>
-        )}
+        </form>
+      </div>
+    </div>
+  );
+}
 
-        {/* Tab Navigation */}
-        <div className="flex gap-4 mb-6">
-          <button
-            onClick={() => setActiveTab('approvals')}
-            className={`px-6 py-2 rounded-lg font-medium transition ${
-              activeTab === 'approvals'
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'bg-white text-gray-700 border hover:bg-gray-50'
-            }`}
-          >
-            <Users size={18} className="inline mr-2" />
-            User Approvals ({pendingUsers.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('analytics')}
-            className={`px-6 py-2 rounded-lg font-medium transition ${
-              activeTab === 'analytics'
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'bg-white text-gray-700 border hover:bg-gray-50'
-            }`}
-          >
-            <BarChart3 size={18} className="inline mr-2" />
-            Analytics
+// Delete Confirm Modal
+function DeleteConfirm({ user: targetUser, onClose, onConfirm, loading }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
+      <div className="bg-slate-900 border border-red-500/20 rounded-2xl p-6 w-full max-w-sm shadow-2xl space-y-4 animate-fade-in-up">
+        <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto">
+          <Trash2 className="w-6 h-6 text-red-400" />
+        </div>
+        <div className="text-center">
+          <h2 className="text-lg font-bold text-white">Delete User Account</h2>
+          <p className="text-slate-400 text-sm mt-1">Are you sure you want to permanently delete <span className="text-white font-semibold">{targetUser.name}</span>? This action cannot be undone.</p>
+        </div>
+        <div className="flex gap-3">
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-bold border border-white/10">Cancel</button>
+          <button onClick={onConfirm} disabled={loading}
+            className="flex-1 py-2.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-400 text-sm font-bold border border-red-500/20 flex items-center justify-center gap-2 transition-all">
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+            {loading ? 'Deleting...' : 'Delete'}
           </button>
         </div>
-
-        {/* APPROVALS TAB */}
-        {activeTab === 'approvals' && (
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <div className="px-6 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white flex items-center justify-between">
-              <h2 className="text-xl font-bold flex items-center gap-2">
-                <Users size={24} />
-                Pending User Approvals
-              </h2>
-              <button
-                onClick={handleRefresh}
-                disabled={refreshing}
-                className="hover:bg-blue-700 p-2 rounded-lg transition disabled:opacity-50"
-                title="Refresh"
-              >
-                <RefreshCw size={20} className={refreshing ? 'animate-spin' : ''} />
-              </button>
-            </div>
-
-            {loading ? (
-              <div className="p-12 text-center">
-                <Loader className="animate-spin mx-auto mb-2" />
-                <p>Loading pending users...</p>
-              </div>
-            ) : pendingUsers.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50 border-b">
-                    <tr>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Name</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Email</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Role</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Department</th>
-                      <th className="px-6 py-3 text-left text-sm font-semibold text-gray-700">Date</th>
-                      <th className="px-6 py-3 text-right text-sm font-semibold text-gray-700">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {pendingUsers.map(user => (
-                      <tr key={user.id} className="hover:bg-gray-50 transition">
-                        <td className="px-6 py-4 font-medium text-gray-900">{user.name}</td>
-                        <td className="px-6 py-4 text-gray-600">{user.email}</td>
-                        <td className="px-6 py-4">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                            {user.role}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-gray-600">
-                          {getDepartmentName(user.department_id)}
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
-                          {new Date(user.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-6 py-4 text-right space-x-3">
-                          <button
-                            onClick={() => handleApprove(user.id, user.name)}
-                            disabled={actionLoading === user.id}
-                            className="inline-flex items-center gap-1 px-4 py-2 bg-green-100 text-green-700 hover:bg-green-200 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {actionLoading === user.id ? (
-                              <Loader size={16} className="animate-spin" />
-                            ) : (
-                              <Check size={16} />
-                            )}
-                            {actionLoading === user.id ? 'Processing...' : 'Approve'}
-                          </button>
-                          <button
-                            onClick={() => handleReject(user.id, user.name)}
-                            disabled={actionLoading === user.id}
-                            className="inline-flex items-center gap-1 px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {actionLoading === user.id ? (
-                              <Loader size={16} className="animate-spin" />
-                            ) : (
-                              <X size={16} />
-                            )}
-                            {actionLoading === user.id ? 'Processing...' : 'Reject'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="p-12 text-center">
-                <AlertCircle size={48} className="mx-auto text-gray-300 mb-4" />
-                <p className="text-gray-500">No pending approvals</p>
-                <p className="text-sm text-gray-400 mt-2">All users have been processed!</p>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ANALYTICS TAB */}
-        {activeTab === 'analytics' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {/* Stats Cards */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm font-medium">Total Users</p>
-                  <p className="text-3xl font-bold text-gray-900 mt-2">
-                    {analyticsData?.totalUsers || 0}
-                  </p>
-                </div>
-                <Users size={40} className="text-blue-600 opacity-20" />
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm font-medium">Total Documents</p>
-                  <p className="text-3xl font-bold text-gray-900 mt-2">
-                    {analyticsData?.totalDocuments || 0}
-                  </p>
-                </div>
-                <FileText size={40} className="text-green-600 opacity-20" />
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm font-medium">Total Bookmarks</p>
-                  <p className="text-3xl font-bold text-gray-900 mt-2">
-                    {analyticsData?.totalBookmarks || 0}
-                  </p>
-                </div>
-                <AlertCircle size={40} className="text-yellow-600 opacity-20" />
-              </div>
-            </div>
-
-            <div className="bg-white rounded-lg shadow p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-gray-600 text-sm font-medium">Searches</p>
-                  <p className="text-3xl font-bold text-gray-900 mt-2">
-                    {analyticsData?.totalSearches || 0}
-                  </p>
-                </div>
-                <BarChart3 size={40} className="text-purple-600 opacity-20" />
-              </div>
-            </div>
-
-            {/* Department Distribution */}
-            {analyticsData?.deptDistribution && analyticsData.deptDistribution.length > 0 && (
-              <div className="bg-white rounded-lg shadow p-6 md:col-span-2">
-                <h3 className="font-bold text-lg mb-4">📊 Department Usage</h3>
-                <div className="space-y-3">
-                  {analyticsData.deptDistribution.map((dept, idx) => (
-                    <div key={idx}>
-                      <div className="flex justify-between text-sm mb-1">
-                        <span className="font-medium text-gray-700">{dept.dept}</span>
-                        <span className="text-gray-600">{dept.count}</span>
-                      </div>
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div
-                          className="bg-blue-600 h-2 rounded-full"
-                          style={{
-                            width: `${Math.min((dept.count / (analyticsData.totalDocuments || 1)) * 100, 100)}%`
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Popular Documents */}
-            {analyticsData?.popularDocs && analyticsData.popularDocs.length > 0 && (
-              <div className="bg-white rounded-lg shadow p-6 md:col-span-2">
-                <h3 className="font-bold text-lg mb-4">🔥 Popular Documents</h3>
-                <div className="space-y-2">
-                  {analyticsData.popularDocs.map((doc, idx) => (
-                    <div key={idx} className="flex justify-between text-sm p-2 bg-gray-50 rounded">
-                      <span className="text-gray-700 truncate">{doc.title}</span>
-                      <span className="font-semibold text-gray-900 ml-2">{doc.views}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
+    </div>
+  );
+}
+
+export default function AdminDashboard({ user }) {
+  const [activeTab, setActiveTab] = useState('overview');
+  const [allUsers, setAllUsers] = useState([]);
+  const [pendingUsers, setPendingUsers] = useState([]);
+  const [documents, setDocuments] = useState([]);
+  const [analytics, setAnalytics] = useState(null);
+  const [userStats, setUserStats] = useState(null);
+  const [departments, setDepartments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [actionLoading, setActionLoading] = useState(null);
+
+  // Filters
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [deptFilter, setDeptFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  // Modals
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [deleteUser, setDeleteUser] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Toast
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, type = 'success') => { setToast({ msg, type }); setTimeout(() => setToast(null), 3000); };
+
+  useEffect(() => { loadAll(); }, []);
+
+  const loadAll = async () => {
+    setLoading(true);
+    try {
+      const [users, pending, docs, anl, stats, depts] = await Promise.all([
+        fetch('/api/admin/users').then(r => r.json()).catch(() => []),
+        fetch('/api/admin/pending-users').then(r => r.json()).catch(() => []),
+        fetch('/api/admin/documents').then(r => r.json()).catch(() => []),
+        fetch('/api/admin/analytics').then(r => r.json()).catch(() => ({})),
+        fetch('/api/admin/user-stats').then(r => r.json()).catch(() => ({})),
+        fetch('/api/departments').then(r => r.json()).catch(() => []),
+      ]);
+      setAllUsers(users || []);
+      setPendingUsers(pending || []);
+      setDocuments(Array.isArray(docs) ? docs : []);
+      setAnalytics(anl || {});
+      setUserStats(stats || {});
+      setDepartments(depts || []);
+    } finally { setLoading(false); }
+  };
+
+  const getDeptName = (id) => departments.find(d => d.id === id)?.name || 'N/A';
+
+  const handleApprove = async (userId, status) => {
+    setActionLoading(userId);
+    try {
+      const r = await fetch(`/api/admin/users/${userId}/approve`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      if (r.ok) { showToast(`User ${status} successfully!`); loadAll(); }
+      else showToast('Action failed', 'error');
+    } catch { showToast('Error', 'error'); }
+    finally { setActionLoading(null); }
+  };
+
+  const handleSuspend = async (userId, action) => {
+    setActionLoading(userId);
+    try {
+      const r = await fetch(`/api/admin/users/${userId}/suspend`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      if (r.ok) { showToast(`User ${action === 'suspend' ? 'suspended' : 'reactivated'}!`); loadAll(); }
+      else showToast('Action failed', 'error');
+    } catch { showToast('Error', 'error'); }
+    finally { setActionLoading(null); }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteUser) return;
+    setDeleteLoading(true);
+    try {
+      const r = await fetch(`/api/admin/users/${deleteUser.id}`, { method: 'DELETE' });
+      if (r.ok) { showToast('User deleted permanently.'); setDeleteUser(null); loadAll(); }
+      else showToast('Delete failed', 'error');
+    } catch { showToast('Error deleting user', 'error'); }
+    finally { setDeleteLoading(false); }
+  };
+
+  const filteredUsers = allUsers.filter(u => {
+    const matchSearch = !search || u.name?.toLowerCase().includes(search.toLowerCase()) || u.email?.toLowerCase().includes(search.toLowerCase());
+    const matchRole = roleFilter === 'all' || u.role === roleFilter;
+    const matchDept = deptFilter === 'all' || u.department_id === deptFilter;
+    const matchStatus = statusFilter === 'all' || u.status === statusFilter;
+    return matchSearch && matchRole && matchDept && matchStatus;
+  });
+
+  const tabs = [
+    { id: 'overview', label: 'Overview', icon: BarChart3 },
+    { id: 'users', label: `All Users (${allUsers.length})`, icon: Users },
+    { id: 'documents', label: `Documents (${documents.length})`, icon: FileText },
+    { id: 'pending', label: `Approvals (${pendingUsers.length})`, icon: Clock },
+    { id: 'analytics', label: 'Analytics', icon: TrendingUp },
+    { id: 'profile', label: 'Profile', icon: Settings },
+  ];
+
+  const overviewStats = [
+    { label: 'Total Students', value: userStats?.totalStudents || 0, icon: GraduationCap, color: 'from-emerald-500/20 to-emerald-600/10 border-emerald-500/15', ic: 'text-emerald-400' },
+    { label: 'Total Teachers', value: userStats?.totalTeachers || 0, icon: Shield, color: 'from-blue-500/20 to-blue-600/10 border-blue-500/15', ic: 'text-blue-400' },
+    { label: 'Pending Approvals', value: userStats?.pendingApprovals || 0, icon: Clock, color: 'from-amber-500/20 to-amber-600/10 border-amber-500/15', ic: 'text-amber-400' },
+    { label: 'Active Users', value: userStats?.activeUsers || 0, icon: Activity, color: 'from-purple-500/20 to-purple-600/10 border-purple-500/15', ic: 'text-purple-400' },
+    { label: 'Total Documents', value: analytics?.totalDocuments || 0, icon: FileText, color: 'from-cyan-500/20 to-cyan-600/10 border-cyan-500/15', ic: 'text-cyan-400' },
+    { label: 'Total Searches', value: analytics?.totalSearches || 0, icon: BarChart3, color: 'from-pink-500/20 to-pink-600/10 border-pink-500/15', ic: 'text-pink-400' },
+  ];
+
+  return (
+    <div className="p-4 md:p-6 space-y-6">
+      {/* Modals */}
+      {showAddModal && <UserModal mode="add" departments={departments} onClose={() => setShowAddModal(false)} onSuccess={() => { showToast('User created!'); loadAll(); }} />}
+      {editUser && <UserModal mode="edit" user={editUser} departments={departments} onClose={() => setEditUser(null)} onSuccess={() => { showToast('User updated!'); loadAll(); }} />}
+      {deleteUser && <DeleteConfirm user={deleteUser} onClose={() => setDeleteUser(null)} onConfirm={handleDelete} loading={deleteLoading} />}
+
+      {/* Toast */}
+      {toast && (
+        <div className={`fixed top-20 right-4 z-[60] px-4 py-3 rounded-xl shadow-2xl text-sm font-semibold flex items-center gap-2 animate-fade-in-up ${toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-emerald-500/90 text-white'}`}>
+          {toast.type === 'error' ? <AlertCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl md:text-3xl font-black text-white">Admin Dashboard</h1>
+          <p className="text-slate-400 text-sm mt-1">Welcome, <span className="text-red-400 font-semibold">{user.name}</span> · Full System Access</p>
+        </div>
+        <button onClick={() => setShowAddModal(true)}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500 text-white text-sm font-bold shadow-lg shadow-emerald-500/20 transition-all">
+          <Plus className="w-4 h-4" />Add User
+        </button>
+      </div>
+
+      {/* Tab Nav */}
+      <div className="flex gap-1 p-1 bg-slate-900/60 rounded-2xl border border-white/[0.06] w-fit overflow-x-auto">
+        {tabs.map(({ id, label, icon: Icon }) => (
+          <button key={id} onClick={() => setActiveTab(id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all whitespace-nowrap flex-shrink-0 ${activeTab === id ? 'bg-gradient-to-r from-red-500 to-orange-500 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}>
+            <Icon className="w-4 h-4" />
+            <span className="hidden sm:inline">{label}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* OVERVIEW TAB */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+            {overviewStats.map(({ label, value, icon: Icon, color, ic }) => (
+              <div key={label} className={`glass-card rounded-2xl p-5 border bg-gradient-to-br ${color}`}>
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="text-xs text-slate-400 font-medium">{label}</p>
+                    <p className="text-3xl font-black text-white mt-1">{value}</p>
+                  </div>
+                  <div className="w-10 h-10 rounded-xl bg-slate-900/50 flex items-center justify-center">
+                    <Icon className={`w-5 h-5 ${ic}`} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Department breakdown */}
+          {userStats?.byDepartment && userStats.byDepartment.length > 0 && (
+            <div className="glass-card rounded-2xl p-5 border border-white/5">
+              <h3 className="font-bold text-white text-sm mb-4 flex items-center gap-2"><Building2 className="w-4 h-4 text-purple-400" />Department Breakdown</h3>
+              <div className="space-y-3">
+                {userStats.byDepartment.map(d => (
+                  <div key={d.dept}>
+                    <div className="flex justify-between text-xs mb-1.5">
+                      <span className="text-slate-300 font-medium">{d.dept}</span>
+                      <span className="text-slate-400">{d.students} students · {d.teachers} teachers</span>
+                    </div>
+                    <div className="w-full bg-slate-900/60 rounded-full h-2 overflow-hidden">
+                      <div className="bg-gradient-to-r from-emerald-500 to-blue-500 h-full rounded-full"
+                        style={{ width: `${Math.min(100, ((d.students + d.teachers) / Math.max(1, userStats.totalStudents + userStats.totalTeachers)) * 100)}%` }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Quick actions */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[
+              { label: 'Add New User', desc: 'Create student or teacher account', onClick: () => setShowAddModal(true), icon: Plus, color: 'text-emerald-400' },
+              { label: 'Manage Users', desc: 'View, edit and manage all accounts', onClick: () => setActiveTab('users'), icon: Users, color: 'text-blue-400' },
+              { label: 'Pending Approvals', desc: `${pendingUsers.length} awaiting review`, onClick: () => setActiveTab('pending'), icon: Clock, color: 'text-amber-400' },
+            ].map(a => (
+              <button key={a.label} onClick={a.onClick}
+                className="glass-card rounded-2xl p-5 border border-white/5 hover:border-white/10 text-left transition-all group">
+                <a.icon className={`w-6 h-6 ${a.color} mb-3`} />
+                <p className="font-bold text-white text-sm">{a.label}</p>
+                <p className="text-xs text-slate-400 mt-0.5">{a.desc}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ALL USERS TAB */}
+      {activeTab === 'users' && (
+        <div className="glass-card rounded-2xl border border-white/5 overflow-hidden">
+          {/* Filters */}
+          <div className="p-4 border-b border-white/[0.06] flex flex-col lg:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+              <input type="text" placeholder="Search by name or email..." value={search} onChange={e => setSearch(e.target.value)}
+                className="w-full bg-slate-900/60 border border-white/10 rounded-xl pl-9 pr-4 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500/50 transition-all" />
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              {[
+                { label: 'Role', key: 'role', value: roleFilter, onChange: setRoleFilter, options: [['all','All Roles'],['student','Students'],['teacher','Teachers'],['admin','Admins']] },
+                { label: 'Status', key: 'status', value: statusFilter, onChange: setStatusFilter, options: [['all','All Status'],['approved','Approved'],['pending','Pending'],['rejected','Rejected'],['suspended','Suspended']] },
+              ].map(f => (
+                <select key={f.key} value={f.value} onChange={e => f.onChange(e.target.value)}
+                  className="bg-slate-900/60 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none appearance-none">
+                  {f.options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              ))}
+              <select value={deptFilter} onChange={e => setDeptFilter(e.target.value)}
+                className="bg-slate-900/60 border border-white/10 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none appearance-none">
+                <option value="all">All Departments</option>
+                {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+              <button onClick={loadAll} className="p-2 rounded-xl text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"><RefreshCw className="w-4 h-4" /></button>
+            </div>
+          </div>
+
+          {loading ? (
+            <div className="p-16 text-center"><Loader2 className="w-8 h-8 text-red-400 animate-spin mx-auto" /></div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="p-16 text-center">
+              <Users className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">No users found</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-white/[0.06] bg-slate-900/30">
+                    {['User', 'Role', 'Department', 'Status', 'Joined', 'Actions'].map(h => (
+                      <th key={h} className="px-4 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {filteredUsers.map(u => (
+                    <tr key={u.id} className="hover:bg-white/[0.02] transition-colors">
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-black flex-shrink-0 ${ROLE_BADGE[u.role] || 'bg-slate-700 text-slate-300'}`}>
+                            {u.name?.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-white">{u.name}</p>
+                            <p className="text-xs text-slate-400">{u.email}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border capitalize ${ROLE_BADGE[u.role] || ''}`}>{u.role}</span>
+                      </td>
+                      <td className="px-4 py-3.5 text-xs text-slate-400">{getDeptName(u.department_id)}</td>
+                      <td className="px-4 py-3.5">
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border capitalize ${STATUS_BADGE[u.status] || ''}`}>{u.status}</span>
+                      </td>
+                      <td className="px-4 py-3.5 text-xs text-slate-400 whitespace-nowrap">{u.created_at ? new Date(u.created_at).toLocaleDateString() : 'N/A'}</td>
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => setEditUser(u)} className="p-1.5 rounded-lg text-slate-500 hover:text-blue-400 hover:bg-blue-500/10 transition-all" title="Edit"><Edit2 className="w-3.5 h-3.5" /></button>
+                          {u.status === 'pending' && (
+                            <button onClick={() => handleApprove(u.id, 'approved')} disabled={actionLoading === u.id}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all" title="Approve">
+                              {actionLoading === u.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+                          {u.status === 'approved' && u.role !== 'admin' && (
+                            <button onClick={() => handleSuspend(u.id, 'suspend')} disabled={actionLoading === u.id}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-amber-400 hover:bg-amber-500/10 transition-all" title="Suspend">
+                              {actionLoading === u.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Lock className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+                          {u.status === 'suspended' && (
+                            <button onClick={() => handleSuspend(u.id, 'reactivate')} disabled={actionLoading === u.id}
+                              className="p-1.5 rounded-lg text-slate-500 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all" title="Reactivate">
+                              <Unlock className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {u.role !== 'admin' && (
+                            <button onClick={() => setDeleteUser(u)} className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* DOCUMENTS TAB */}
+      {activeTab === 'documents' && (
+        <div className="glass-card rounded-2xl border border-white/5 overflow-hidden">
+          <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+            <h2 className="font-bold text-white flex items-center gap-2"><FileText className="w-5 h-5 text-cyan-400" />All Documents ({documents.length})</h2>
+            <button onClick={loadAll} className="p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"><RefreshCw className="w-4 h-4" /></button>
+          </div>
+          {loading ? (
+            <div className="p-16 text-center"><Loader2 className="w-8 h-8 text-red-400 animate-spin mx-auto" /></div>
+          ) : documents.length === 0 ? (
+            <div className="p-16 text-center">
+              <FileText className="w-12 h-12 text-slate-600 mx-auto mb-3" />
+              <p className="text-slate-400 font-medium">No documents uploaded</p>
+              <p className="text-slate-500 text-sm">Teacher uploads will appear here</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-white/[0.04]">
+              {documents.map(doc => (
+                <div key={doc.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-white/[0.02] transition-colors">
+                  <div className="min-w-0">
+                    <p className="font-bold text-white text-sm truncate">{doc.title || 'Untitled document'}</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {doc.uploader_name || 'Faculty'} Â· {getDeptName(doc.department_id)} Â· {doc.created_at ? new Date(doc.created_at).toLocaleDateString() : 'N/A'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border border-cyan-500/20 bg-cyan-500/10 text-cyan-400 capitalize">{doc.file_type || 'document'}</span>
+                    {doc.storage_path && (
+                      <a href={`/api/documents/${doc.id}/download`} target="_blank" rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 text-xs font-bold border border-emerald-500/20 transition-all">
+                        <Download className="w-3.5 h-3.5" />View
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* APPROVALS TAB */}
+      {activeTab === 'pending' && (
+        <div className="glass-card rounded-2xl border border-white/5 overflow-hidden">
+          <div className="px-5 py-4 border-b border-white/[0.06] flex items-center justify-between">
+            <h2 className="font-bold text-white flex items-center gap-2"><Clock className="w-5 h-5 text-amber-400" />Pending Approvals ({pendingUsers.length})</h2>
+            <button onClick={loadAll} className="p-1.5 rounded-lg text-slate-500 hover:text-slate-300 hover:bg-white/5 transition-colors"><RefreshCw className="w-4 h-4" /></button>
+          </div>
+          {pendingUsers.length === 0 ? (
+            <div className="p-16 text-center">
+              <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3 opacity-50" />
+              <p className="text-slate-400 font-medium">No pending approvals</p>
+              <p className="text-slate-500 text-sm">All registration requests have been processed</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-white/[0.04]">
+              {pendingUsers.map(u => (
+                <div key={u.id} className="px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-white/[0.02] transition-colors">
+                  <div className="flex items-start gap-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-black flex-shrink-0 ${ROLE_BADGE[u.role] || 'bg-slate-800 text-slate-300'} border`}>
+                      {u.name?.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-white text-sm">{u.name}</p>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border capitalize ${ROLE_BADGE[u.role] || ''}`}>{u.role}</span>
+                      </div>
+                      <p className="text-xs text-slate-400">{u.email}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {getDeptName(u.department_id)} · {u.created_at ? new Date(u.created_at).toLocaleDateString() : 'N/A'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => handleApprove(u.id, 'rejected')} disabled={actionLoading === u.id}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 text-xs font-bold transition-all">
+                      {actionLoading === u.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}Reject
+                    </button>
+                    <button onClick={() => handleApprove(u.id, 'approved')} disabled={actionLoading === u.id}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/30 text-xs font-bold transition-all">
+                      {actionLoading === u.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}Approve
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ANALYTICS TAB */}
+      {activeTab === 'analytics' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="glass-card rounded-2xl p-5 border border-white/5">
+            <h3 className="font-bold text-white text-sm mb-4 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-blue-400" />System Statistics</h3>
+            <div className="space-y-3">
+              {[
+                { label: 'Total Users', value: (userStats?.totalStudents || 0) + (userStats?.totalTeachers || 0), color: 'bg-blue-500' },
+                { label: 'Total Documents', value: analytics?.totalDocuments || 0, color: 'bg-emerald-500' },
+                { label: 'Total Bookmarks', value: analytics?.totalBookmarks || 0, color: 'bg-amber-500' },
+                { label: 'AI Searches', value: analytics?.totalSearches || 0, color: 'bg-purple-500' },
+              ].map(s => (
+                <div key={s.label}>
+                  <div className="flex justify-between text-xs mb-1"><span className="text-slate-300">{s.label}</span><span className="text-slate-400 font-bold">{s.value}</span></div>
+                  <div className="w-full bg-slate-900/60 rounded-full h-2"><div className={`${s.color} h-full rounded-full transition-all`} style={{ width: `${Math.min(100, (s.value / Math.max(1, analytics?.totalDocuments || 10)) * 100)}%` }} /></div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {analytics?.deptDistribution?.length > 0 && (
+            <div className="glass-card rounded-2xl p-5 border border-white/5">
+              <h3 className="font-bold text-white text-sm mb-4 flex items-center gap-2"><Building2 className="w-4 h-4 text-purple-400" />Documents by Department</h3>
+              <div className="space-y-3">
+                {analytics.deptDistribution.map(d => (
+                  <div key={d.dept}>
+                    <div className="flex justify-between text-xs mb-1"><span className="text-slate-300">{d.dept}</span><span className="text-slate-400 font-bold">{d.count} docs</span></div>
+                    <div className="w-full bg-slate-900/60 rounded-full h-2"><div className="bg-gradient-to-r from-purple-500 to-blue-500 h-full rounded-full" style={{ width: `${Math.min(100, (d.count / Math.max(1, analytics.totalDocuments || 1)) * 100)}%` }} /></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {analytics?.popularDocs?.length > 0 && (
+            <div className="glass-card rounded-2xl p-5 border border-white/5 md:col-span-2">
+              <h3 className="font-bold text-white text-sm mb-4 flex items-center gap-2"><TrendingUp className="w-4 h-4 text-pink-400" />Most Viewed Documents</h3>
+              <div className="space-y-2">
+                {analytics.popularDocs.map((doc, i) => (
+                  <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-900/40 border border-white/5">
+                    <span className="text-sm text-slate-300 truncate">{doc.title}</span>
+                    <span className="text-xs text-pink-400 font-bold ml-2 flex-shrink-0">{doc.views} views</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
