@@ -389,7 +389,7 @@ const dbReal = {
       .from('document_chunks')
       .select(`
         *,
-        documents(title, file_type, department_id)
+        documents(title, file_type, department_id, created_at)
       `);
 
     if (error) throw error;
@@ -399,6 +399,7 @@ const dbReal = {
       doc_title: c.documents?.title || 'Document',
       doc_type: c.documents?.file_type || 'notes',
       department_id: c.documents?.department_id || '1',
+      doc_created_at: c.documents?.created_at || null,
       embedding: JSON.parse(c.embedding || '[]')
     }));
   },
