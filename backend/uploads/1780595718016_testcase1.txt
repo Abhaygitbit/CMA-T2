@@ -1,0 +1,29 @@
+Test Timetable Document
+=======================
+
+Campus Schedule
+
+Monday: 
+- 9:00 AM - 11:00 AM: Data Structures Lab in Computer Lab A
+- 2:00 PM - 4:00 PM: Calculus Lecture in Room 101
+
+Tuesday:
+- 10:00 AM - 12:00 PM: Algorithms Lecture in Room 202
+- 3:00 PM - 5:00 PM: Physics Lab in Science Building
+
+Wednesday:
+- 2:00 PM - 4:00 PM: Database Design Workshop in Room 305
+- 4:30 PM - 6:00 PM: Study Group Meeting in Library
+
+Thursday:
+- 11:00 AM - 1:00 PM: Operating Systems Lecture in Room 401
+- 2:00 PM - 3:30 PM: Office Hours with Professor Smith
+
+Friday:
+- 3:00 PM - 5:00 PM: Network Fundamentals Lab in Computer Lab B
+- 5:30 PM - 6:30 PM: Programming Project Presentation
+
+Important Notes:
+- All classes require attendance
+- Lab materials will be provided
+- Office hours are available by appointment

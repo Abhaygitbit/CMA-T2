@@ -139,7 +139,7 @@ export async function extractTextFromBuffer(buffer, filename) {
  * @param {number} overlap 
  * @returns {Array<string>} Array of text chunks
  */
-export function generateChunks(text, targetChunkSize = 800, overlap = 150) {
+export function generateChunks(text, targetChunkSize = 350, overlap = 50) {
   // Clean double spaces/returns to preserve space
   const cleanedText = text.replace(/\s+/g, ' ').trim();
   if (cleanedText.length <= targetChunkSize) {
