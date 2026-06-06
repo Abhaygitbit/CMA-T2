@@ -13,8 +13,11 @@ import { uploadToFirebase } from './database/firebaseUtils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-dotenv.config({ path: path.join(__dirname, '..', '.env') });
 dotenv.config({ path: path.join(__dirname, '.env') });
+
+// Startup env check
+console.log('[server.js] SUPABASE_URL:', process.env.SUPABASE_URL || '❌ MISSING');
+console.log('[server.js] SERVICE KEY LOADED:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -32,18 +35,7 @@ function safeUploadName(originalName) {
   return `${Date.now()}_${base}${ext}`;
 }
 
-async function saveUploadLocally(file) {
-  await fs.promises.mkdir(uploadsDir, { recursive: true });
-  const fileName = safeUploadName(file.originalname);
-  const fullPath = path.join(uploadsDir, fileName);
-  await fs.promises.writeFile(fullPath, file.buffer);
-  return {
-    storagePath: `uploads/${fileName}`,
-    downloadURL: `/uploads/${fileName}`,
-    fileName,
-    timestamp: Date.now()
-  };
-}
+// Local upload fallback removed — all files go to Supabase Storage
 
 // Set up Multer for in-memory uploads (handles both PDF and DOCX)
 const storage = multer.memoryStorage();
@@ -313,21 +305,20 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
     // Update corpus statistics for TF-IDF vectorization
     updateCorpusStatistics(parsed.rawText);
     
-    // 2. Upload file to Firebase Storage (with fallback)
-    let firebaseUpload;
-    try {
-      firebaseUpload = await uploadToFirebase(req.file.buffer, req.file.originalname, 'documents');
-    } catch (firebaseErr) {
-      console.warn('Firebase upload failed, saving file locally instead:', firebaseErr.message);
-      firebaseUpload = await saveUploadLocally(req.file);
-    }
-    
-    // 3. Insert master document record with Firebase URL
+    // 2. Upload file to Supabase Storage
+    const supabaseUpload = await uploadToFirebase(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype  // ← correct MIME type, fixes "signature verification failed"
+    );
+    console.log('[server.js] ✓ Upload complete:', supabaseUpload.publicUrl);
+
+    // 3. Insert master document record with Supabase public URL
     const docConfig = {
       id: `doc_${Date.now()}`,
       title: title || parsed.title,
       file_type: file_type, // notes | timetable | notice | assignment | exam
-      storage_path: firebaseUpload.downloadURL, // Use Firebase download URL instead of local path
+      storage_path: supabaseUpload.publicUrl, // Supabase public URL — never a local path
       uploader_id,
       department_id
     };
@@ -359,7 +350,7 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
       message: `Document "${savedDoc.title}" uploaded and indexed successfully. ${parsed.chunks.length} chunks processed.`,
       document: savedDoc,
       chunksCount: parsed.chunks.length,
-      firebaseURL: firebaseUpload.downloadURL
+      storageURL: supabaseUpload.publicUrl
     });
   } catch (err) {
     console.error('Administrative ingestion failed:', err);
@@ -389,7 +380,7 @@ app.get('/api/documents', async (req, res) => {
   }
 });
 
-// Download document through the backend so local fallback files and remote URLs both work.
+// Download document — redirects to Supabase public URL
 app.get('/api/documents/:id/download', async (req, res) => {
   try {
     const doc = await db.getDocumentById(req.params.id);
@@ -401,22 +392,15 @@ app.get('/api/documents/:id/download', async (req, res) => {
       return res.status(403).json({ error: 'You can only access documents from your department.' });
     }
 
+    // All new uploads are Supabase public URLs — redirect directly
     if (/^https?:\/\//i.test(doc.storage_path)) {
-      if (/firebasestorage\.googleapis\.com/i.test(doc.storage_path) && !/[?&]token=/.test(doc.storage_path)) {
-        return res.status(404).json({
-          error: 'This document file is not available. It was saved with an invalid fallback Firebase URL. Please ask the teacher to re-upload it.'
-        });
-      }
       return res.redirect(doc.storage_path);
     }
 
-    const relativePath = doc.storage_path.replace(/^\/+/, '');
-    const fullPath = path.resolve(__dirname, relativePath);
-    if (!fullPath.startsWith(path.resolve(uploadsDir))) {
-      return res.status(400).json({ error: 'Invalid document path.' });
-    }
-
-    return res.download(fullPath, doc.title || path.basename(fullPath));
+    // Legacy local path fallback (old uploads before migration)
+    return res.status(410).json({
+      error: 'This document was uploaded before Supabase migration and is no longer available. Please ask the teacher to re-upload it.'
+    });
   } catch (err) {
     console.error('Document download failed:', err);
     res.status(500).json({ error: 'Failed to download document.' });
