@@ -1,25 +1,10 @@
 -- Supabase Database Schema for Campus Memory Assistant (CMA-2)
--- This SQL file creates all required tables for the application
--- 
--- SETUP INSTRUCTIONS:
--- 1. Go to: https://app.supabase.com
--- 2. Select your CMA-2 project
--- 3. Go to: SQL Editor → New Query
--- 4. Copy and paste this entire SQL file
--- 5. Click "Run" to execute all statements
--- 6. Verify all tables are created successfully
---
--- EXPECTED TABLES:
--- - departments
--- - users
--- - documents
--- - document_chunks
--- - bookmarks
--- - analytics
---
+-- Now with pgvector for Semantic Search!
+
+-- 1. Enable pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
 
 -- Create departments table
--- Stores department information for the university
 CREATE TABLE IF NOT EXISTS departments (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -27,7 +12,6 @@ CREATE TABLE IF NOT EXISTS departments (
 );
 
 -- Create users table
--- Stores user profile information including authentication details
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -42,11 +26,9 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- Add phone column to existing users table if it doesn't exist yet
--- (Run this if you already have the users table without the phone column)
 ALTER TABLE users ADD COLUMN IF NOT EXISTS phone TEXT;
 
 -- Create documents table
--- Stores metadata about uploaded documents
 CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -58,17 +40,49 @@ CREATE TABLE IF NOT EXISTS documents (
   created_at TEXT
 );
 
--- Create document_chunks table
--- Stores text chunks extracted from documents for RAG/searching
+-- Create document_chunks table with vector embeddings
 CREATE TABLE IF NOT EXISTS document_chunks (
   id TEXT PRIMARY KEY,
   document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
   chunk_text TEXT NOT NULL,
-  embedding TEXT
+  embedding vector(384) -- BAAI/bge-small-en-v1.5 has 384 dimensions
 );
 
+-- Create HNSW index for fast vector search
+CREATE INDEX ON document_chunks USING hnsw (embedding vector_cosine_ops);
+
+-- Create match_document_chunks RPC function
+CREATE OR REPLACE FUNCTION match_document_chunks (
+  query_embedding vector(384),
+  match_threshold float,
+  match_count int,
+  department_filter text DEFAULT NULL
+)
+RETURNS TABLE (
+  id text,
+  document_id text,
+  chunk_text text,
+  similarity float
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    document_chunks.id,
+    document_chunks.document_id,
+    document_chunks.chunk_text,
+    1 - (document_chunks.embedding <=> query_embedding) AS similarity
+  FROM document_chunks
+  JOIN documents ON documents.id = document_chunks.document_id
+  WHERE 1 - (document_chunks.embedding <=> query_embedding) > match_threshold
+    AND (department_filter IS NULL OR documents.department_id = department_filter)
+  ORDER BY document_chunks.embedding <=> query_embedding
+  LIMIT match_count;
+END;
+$$;
+
 -- Create bookmarks table
--- Stores user bookmarks for quick access to documents
 CREATE TABLE IF NOT EXISTS bookmarks (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id),
@@ -77,7 +91,6 @@ CREATE TABLE IF NOT EXISTS bookmarks (
 );
 
 -- Create analytics table
--- Stores analytics data about user interactions
 CREATE TABLE IF NOT EXISTS analytics (
   id TEXT PRIMARY KEY,
   document_id TEXT REFERENCES documents(id),
@@ -87,7 +100,6 @@ CREATE TABLE IF NOT EXISTS analytics (
 );
 
 -- Disable Row Level Security (RLS) for testing
--- NOTE: In production, enable RLS with appropriate policies
 ALTER TABLE IF EXISTS departments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS users DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS documents DISABLE ROW LEVEL SECURITY;

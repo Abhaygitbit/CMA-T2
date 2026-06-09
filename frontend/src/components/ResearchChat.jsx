@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Send, Cpu, User, Loader2, MessageSquare, AlertCircle } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function ResearchChat({ paper = null, user = null }) {
   const storedUser = useMemo(() => {
@@ -175,7 +177,23 @@ export default function ResearchChat({ paper = null, user = null }) {
               }`}>
                 {/* Parse Markdown summaries gracefully */}
                 <div className="prose prose-slate max-w-none text-xs space-y-2 whitespace-pre-wrap">
-                  {msg.text}
+                  {isAI ? (
+                    <ReactMarkdown 
+                      remarkPlugins={[remarkGfm]}
+                      components={{
+                        a: ({node, href, children, ...props}) => {
+                          if (href?.startsWith('#citation-')) {
+                            return <span className="inline-flex items-center justify-center bg-blue-100 border border-blue-200 text-blue-700 text-[10px] font-bold h-4 px-1.5 rounded-sm cursor-help mx-0.5 hover:bg-blue-200 transition-colors" title="Source Document Citation">[{children}]</span>
+                          }
+                          return <a href={href} {...props} className="text-blue-500 underline">{children}</a>
+                        }
+                      }}
+                    >
+                      {msg.text.replace(/\[(\d+)\]/g, '[$1](#citation-$1)')}
+                    </ReactMarkdown>
+                  ) : (
+                    msg.text
+                  )}
                 </div>
               </div>
             </div>

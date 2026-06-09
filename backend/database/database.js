@@ -12,14 +12,14 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 // Initialize Supabase client
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('ERROR: SUPABASE_URL and SUPABASE_ANON_KEY must be set in .env');
+if (!supabaseUrl || !supabaseKey) {
+  console.error('ERROR: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or SUPABASE_ANON_KEY) must be set in .env');
   process.exit(1);
 }
 
-const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 console.log('✓ Connected to Supabase database');
 
@@ -373,7 +373,7 @@ const dbReal = {
       id: chunk.id || `chk_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
       document_id: chunk.document_id,
       chunk_text: chunk.chunk_text,
-      embedding: JSON.stringify(chunk.embedding || [])
+      embedding: chunk.embedding || null
     }));
 
     const { error } = await supabase
@@ -400,8 +400,23 @@ const dbReal = {
       doc_type: c.documents?.file_type || 'notes',
       department_id: c.documents?.department_id || '1',
       doc_created_at: c.documents?.created_at || null,
-      embedding: JSON.parse(c.embedding || '[]')
+      embedding: typeof c.embedding === 'string' ? JSON.parse(c.embedding) : (c.embedding || [])
     }));
+  },
+
+  matchDocumentChunks: async (queryEmbedding, limit = 5, departmentId = null) => {
+    const { data, error } = await supabase.rpc('match_document_chunks', {
+      query_embedding: queryEmbedding,
+      match_threshold: 0.3,
+      match_count: limit,
+      department_filter: departmentId
+    });
+
+    if (error) {
+      console.error('RPC match_document_chunks Error:', error);
+      throw error;
+    }
+    return data || [];
   },
 
   // ============ BOOKMARKS ============

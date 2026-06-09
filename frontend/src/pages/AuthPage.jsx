@@ -156,12 +156,12 @@ export default function AuthPage({ onAuthSuccess }) {
                   <span className="bg-gradient-to-r from-emerald-400 to-blue-400 bg-clip-text text-transparent">Intelligence Hub</span>
                 </h2>
                 <p className="text-slate-400 text-sm leading-relaxed">
-                  Powered by Gemini AI with RAG technology for accurate, document-grounded answers about your courses.
+                  Powered by Llama-3 AI with RAG technology for accurate, document-grounded answers about your courses.
                 </p>
               </div>
 
               {[
-                { icon: Cpu, title: 'Gemini AI + RAG', desc: 'Accurate answers from faculty-uploaded documents', color: 'text-emerald-400' },
+                { icon: Cpu, title: 'Llama 3 AI + RAG', desc: 'Accurate answers from faculty-uploaded documents', color: 'text-emerald-400' },
                 { icon: BookOpen, title: 'Smart Document Search', desc: 'Semantic search across all uploaded materials', color: 'text-blue-400' },
                 { icon: Shield, title: 'Role-Based Access', desc: 'Students, Teachers & Admins each have tailored dashboards', color: 'text-purple-400' },
                 { icon: Sparkles, title: 'Department Approval', desc: 'Department teachers approve students automatically', color: 'text-amber-400' },

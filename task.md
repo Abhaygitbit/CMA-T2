@@ -1,0 +1,10 @@
+- `[x]` 1. Fix fake AI implementation & setup packages
+  - `[x]` Install `@huggingface/inference`, `groq-sdk`, `langchain` in backend
+  - `[x]` Implement real RAG using `match_documents` Supabase RPC.
+- `[x]` Switch `geminiClient.js` logic to use Groq API and `BAAI/bge-small-en-v1.5`.
+- `[x]` Implement Citation Pill UI `[1]` inside the Chat interface.
+- `[x]` Create Study Guide Generator endpoint.
+- `[x]` Create Quiz Generator endpoint.
+- `[x]` Create Flashcard Generator endpoint.
+- `[x]` Implement NotebookLM-style document chat.
+- `[x]` Full UI/UX Dark-Mode SaaS polish (Glassmorphism, Llama-3 branding).

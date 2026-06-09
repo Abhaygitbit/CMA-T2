@@ -7,8 +7,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { db } from './database/database.js';
 import { processDocumentUpload, sanitizeExtractedText } from './api/pdfExtractor.js';
-import { gemini, cosineSimilarity, updateCorpusStatistics, classifyIntent } from './api/geminiClient.js';
-import { uploadToFirebase } from './database/firebaseUtils.js';
+import { getEmbedding, generateSummary, generateAnswerWithRAG, generateQuiz, generateStudyGuide, generateFlashcards } from './api/aiService.js';
+import { uploadToSupabase } from './api/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -302,11 +302,10 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
     
     console.log(`Extraction quality check: ${(validRatio*100).toFixed(1)}% valid characters - PASSED`);
     
-    // Update corpus statistics for TF-IDF vectorization
-    updateCorpusStatistics(parsed.rawText);
+    // TF-IDF removed for semantic embeddings
     
     // 2. Upload file to Supabase Storage
-    const supabaseUpload = await uploadToFirebase(
+    const supabaseUpload = await uploadToSupabase(
       req.file.buffer,
       req.file.originalname,
       req.file.mimetype  // ← correct MIME type, fixes "signature verification failed"
@@ -331,7 +330,7 @@ app.post('/api/documents/upload', upload.single('document'), async (req, res) =>
 
     for (let i = 0; i < parsed.chunks.length; i++) {
       const chunkText = parsed.chunks[i];
-      const vector = await gemini.getEmbedding(chunkText);
+      const vector = await getEmbedding(chunkText);
       chunkRecords.push({
         id: `chk_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 5)}`,
         document_id: savedDoc.id,
@@ -467,11 +466,53 @@ app.get('/api/documents/:id/summary', async (req, res) => {
     const fullText = docChunks.map(c => c.chunk_text).join('\n\n');
 
     db.logAnalytics(docId, 'ai_summary');
-    const summary = await gemini.generateSummary(doc.title, fullText || 'No text extracted.');
+    const summary = await generateSummary(doc.title, fullText || 'No text extracted.');
     res.json({ summary });
   } catch (err) {
     console.error('AI summary fail:', err);
     res.status(500).json({ error: 'Failed to generate AI summary.' });
+  }
+});
+
+// Generate document Quiz
+app.get('/api/documents/:id/quiz', async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const allChunks = await db.getAllDocumentChunks();
+    const docChunks = allChunks.filter(c => c.document_id === docId);
+    const fullText = docChunks.map(c => c.chunk_text).join('\n\n');
+    const quiz = await generateQuiz(fullText || 'No text extracted.');
+    res.json({ quiz });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate quiz.' });
+  }
+});
+
+// Generate document Study Guide
+app.get('/api/documents/:id/study-guide', async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const allChunks = await db.getAllDocumentChunks();
+    const docChunks = allChunks.filter(c => c.document_id === docId);
+    const fullText = docChunks.map(c => c.chunk_text).join('\n\n');
+    const studyGuide = await generateStudyGuide(fullText || 'No text extracted.');
+    res.json({ studyGuide });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate study guide.' });
+  }
+});
+
+// Generate document Flashcards
+app.get('/api/documents/:id/flashcards', async (req, res) => {
+  try {
+    const docId = req.params.id;
+    const allChunks = await db.getAllDocumentChunks();
+    const docChunks = allChunks.filter(c => c.document_id === docId);
+    const fullText = docChunks.map(c => c.chunk_text).join('\n\n');
+    const flashcards = await generateFlashcards(fullText || 'No text extracted.');
+    res.json({ flashcards });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate flashcards.' });
   }
 });
 
@@ -541,7 +582,7 @@ app.get('/api/research/:id/summary', async (req, res) => {
     const paperChunks = chunks.filter(chunk => chunk.document_id === paperId);
     const fullText = paper.full_text || paperChunks.map(chunk => chunk.chunk_text).join('\n\n');
 
-    const summary = await gemini.generateSummary(paper.title || 'Research Paper', fullText || paper.abstract || 'No text extracted.');
+    const summary = await generateSummary(paper.title || 'Research Paper', fullText || paper.abstract || 'No text extracted.');
     res.json({ summary });
   } catch (err) {
     console.error('Research summary failed:', err);
@@ -576,9 +617,9 @@ app.post('/api/research/lit-review', async (req, res) => {
       `Title: ${paper.title || 'Untitled'}\nAbstract: ${paper.abstract || ''}\nText: ${(paper.full_text || '').slice(0, 5000)}`
     )).join('\n\n---\n\n');
 
-    const review = await gemini.generateAnswer(
+    const review = await generateAnswerWithRAG(
       `Write a comparative literature review focused on: ${topic}`,
-      reviewContext
+      selectedPapers.map(p => ({ document_id: p.id, chunk_text: p.abstract || '' }))
     );
 
     res.json({ review });
@@ -600,15 +641,13 @@ app.post('/api/research/general/chat', async (req, res) => {
       return res.status(400).json({ error: 'Question is required.' });
     }
 
-    // Pull all chunks in college
-    const allChunks = await db.getAllDocumentChunks();
-    const effectiveDepartmentId = department_id || user_context?.department_id || null;
-    const deptChunks = effectiveDepartmentId
-      ? allChunks.filter(c => c.department_id === effectiveDepartmentId)
-      : allChunks;
-
     db.logAnalytics(null, 'rag_chat', question);
-    const answer = await gemini.answerQueryWithRAG(question, deptChunks, user_context);
+
+    const effectiveDeptId = department_id || user_context?.department_id || null;
+    const queryEmbedding = await getEmbedding(question);
+    const relevantChunks = await db.matchDocumentChunks(queryEmbedding, 5, effectiveDeptId);
+
+    const answer = await generateAnswerWithRAG(question, relevantChunks, user_context);
     res.json({ answer });
   } catch (err) {
     console.error('General RAG Chat failed:', err);
@@ -626,13 +665,15 @@ app.post('/api/research/:id/chat', async (req, res) => {
       return res.status(400).json({ error: 'Question is required.' });
     }
 
-    // Pull all chunks in college
-    const allChunks = await db.getAllDocumentChunks();
-    // Filter chunks of this specific document only
-    const docChunks = allChunks.filter(c => c.document_id === docId);
-
     db.logAnalytics(docId, 'doc_chat', question);
-    const answer = await gemini.answerQueryWithRAG(question, docChunks, user_context);
+    const queryEmbedding = await getEmbedding(question);
+    const allChunks = await db.getAllDocumentChunks();
+    const docChunks = allChunks.filter(c => c.document_id === docId);
+    
+    // Sort doc chunks by naive string match if we don't have doc-specific pgvector filtering yet
+    // Actually we'll just pass all chunks if small, or top 10.
+    const chunksToPass = docChunks.slice(0, 10);
+    const answer = await generateAnswerWithRAG(question, chunksToPass, user_context);
     res.json({ answer });
   } catch (err) {
     console.error('Target document RAG Q&A failed:', err);
@@ -734,13 +775,16 @@ app.post('/api/admin/research/upload', upload.single('pdf'), async (req, res) =>
     if (!req.file) {
       return res.status(400).json({ error: 'No file was uploaded.' });
     }
-    const { department_id } = req.body;
+    const { department_id, uploader_id } = req.body;
 
     if (!department_id) {
       return res.status(400).json({ error: 'Department ID is required.' });
     }
 
-    console.log(`Admin Research Ingestion: Processing upload "${req.file.originalname}" for dept ${department_id}...`);
+    // Resolve the real uploader — fall back to 'u_admin' (the seeded admin row)
+    const resolvedUploaderId = uploader_id || 'u_admin';
+
+    console.log(`Admin Research Ingestion: Processing upload "${req.file.originalname}" for dept ${department_id} by ${resolvedUploaderId}...`);
 
     // 1. Process document: extract text & generate overlapping chunks
     const parsed = await processDocumentUpload(req.file.buffer, req.file.originalname);
@@ -751,7 +795,7 @@ app.post('/api/admin/research/upload', upload.single('pdf'), async (req, res) =>
       title: parsed.title || req.file.originalname,
       file_type: 'research', // Mark as research document
       storage_path: `uploads/${Date.now()}_${req.file.originalname}`,
-      uploader_id: 'admin',
+      uploader_id: resolvedUploaderId,
       department_id,
       status: 'pending' // Start as pending for admin review
     };
@@ -764,7 +808,7 @@ app.post('/api/admin/research/upload', upload.single('pdf'), async (req, res) =>
 
     for (let i = 0; i < parsed.chunks.length; i++) {
       const chunkText = parsed.chunks[i];
-      const vector = await gemini.getEmbedding(chunkText);
+      const vector = await getEmbedding(chunkText);
       chunkRecords.push({
         id: `chk_${Date.now()}_${i}_${Math.random().toString(36).substr(2, 5)}`,
         document_id: savedDoc.id,
@@ -948,35 +992,44 @@ app.post('/api/rag/search', async (req, res) => {
     }
 
     const startTime = Date.now();
-
-    // Get all chunks, filtered by department
-    const allChunks = await db.getAllDocumentChunks();
     const effectiveDeptId = department_id || user_context?.department_id || null;
-    const filteredChunks = effectiveDeptId
-      ? allChunks.filter(c => c.department_id === effectiveDeptId)
-      : allChunks;
 
-    const intent = classifyIntent(query);
-    console.log(`[RAG] intent=${intent} dept=${effectiveDeptId || 'all'} chunks=${filteredChunks.length} query="${query.substring(0, 80)}"`);
+    // Generate embedding for the query
+    const queryEmbedding = await getEmbedding(query);
+    const relevantChunks = await db.matchDocumentChunks(queryEmbedding, 5, effectiveDeptId);
 
-    // Use the unified RAG pipeline (handles both doc-based and general knowledge)
-    const answer = await gemini.answerQueryWithRAG(query, filteredChunks, user_context);
+    console.log(`[RAG] dept=${effectiveDeptId || 'all'} chunks=${relevantChunks.length} query="${query.substring(0, 80)}"`);
+
+    // Short-circuit: no documents indexed yet — skip LLM call
+    if (relevantChunks.length === 0) {
+      return res.json({
+        answer: "📚 No documents have been indexed yet for your department. Please ask your teacher to upload course materials first. Once uploaded, I can answer questions about timetables, assignments, exams, and more!",
+        sourceDocument: null,
+        intent: 'no_context',
+        relevantChunks: 0,
+        processingTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`
+      });
+    }
+
+    const answer = await generateAnswerWithRAG(query, relevantChunks, user_context);
 
     // Log analytics
     await db.logAnalytics(null, 'RAG', query);
 
-    const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
-
     res.json({
       answer,
-      sourceDocument: ['academic', 'personalized'].includes(intent) ? null : 'General Knowledge',
-      intent,
-      relevantChunks: filteredChunks.length,
-      processingTime: `${processingTime}s`
+      sourceDocument: null,
+      intent: 'academic',
+      relevantChunks: relevantChunks.length,
+      processingTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`
     });
   } catch (err) {
     console.error('RAG search error:', err);
-    res.status(500).json({ error: err.message || 'AI search failed.' });
+    // Return a friendly message instead of a raw 500
+    res.status(500).json({
+      answer: `⚠️ AI search encountered an error: ${err.message}. Please check that your GROQ_API_KEY and HUGGINGFACE_API_KEY are set correctly in the backend .env file.`,
+      error: err.message || 'AI search failed.'
+    });
   }
 });
 

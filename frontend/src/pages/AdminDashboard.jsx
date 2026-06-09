@@ -3,9 +3,10 @@ import {
   Users, FileText, BarChart3, Check, X, Loader2, AlertCircle, CheckCircle,
   RefreshCw, Search, Filter, Plus, Edit2, Trash2, Shield, Building2,
   UserCheck, UserX, Lock, Unlock, GraduationCap, ChevronDown, Eye,
-  TrendingUp, Activity, Clock, Mail, Phone, Download, Settings, Folder
+  TrendingUp, Activity, Clock, Mail, Phone, Download, Settings, Folder, Upload
 } from 'lucide-react';
 import ProfileSettings from '../components/ProfileSettings.jsx';
+import AdminConsole from './AdminConsole.jsx';
 
 const STATUS_BADGE = {
   approved: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20',
@@ -239,6 +240,7 @@ export default function AdminDashboard({ user }) {
     { id: 'overview', label: 'Overview', icon: BarChart3 },
     { id: 'users', label: `All Users (${allUsers.length})`, icon: Users },
     { id: 'documents', label: `Documents (${documents.length})`, icon: FileText },
+    { id: 'console', label: 'Upload Station', icon: Upload },
     { id: 'pending', label: `Approvals (${pendingUsers.length})`, icon: Clock },
     { id: 'analytics', label: 'Analytics', icon: TrendingUp },
     { id: 'profile', label: 'Profile', icon: Settings },
@@ -336,7 +338,7 @@ export default function AdminDashboard({ user }) {
             {[
               { label: 'Add New User', desc: 'Create student or teacher account', onClick: () => setShowAddModal(true), icon: Plus, color: 'text-emerald-400' },
               { label: 'Manage Users', desc: 'View, edit and manage all accounts', onClick: () => setActiveTab('users'), icon: Users, color: 'text-blue-400' },
-              { label: 'Pending Approvals', desc: `${pendingUsers.length} awaiting review`, onClick: () => setActiveTab('pending'), icon: Clock, color: 'text-amber-400' },
+              { label: 'Upload Document', desc: 'Ingest and verify new academic PDFs', onClick: () => setActiveTab('console'), icon: Upload, color: 'text-cyan-400' },
             ].map(a => (
               <button key={a.label} onClick={a.onClick}
                 className="glass-card rounded-2xl p-5 border border-white/5 hover:border-white/10 text-left transition-all group">
@@ -491,6 +493,11 @@ export default function AdminDashboard({ user }) {
             </div>
           )}
         </div>
+      )}
+
+      {/* ADMIN CONSOLE / UPLOAD STATION TAB */}
+      {activeTab === 'console' && (
+        <AdminConsole user={user} />
       )}
 
       {/* APPROVALS TAB */}

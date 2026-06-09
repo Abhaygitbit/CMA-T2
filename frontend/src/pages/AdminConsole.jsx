@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Upload, FileText, Check, X, Edit, BarChart3, ListFilter, AlertCircle, RefreshCw, Cpu, Layers, User } from 'lucide-react';
 
-export default function AdminConsole() {
+export default function AdminConsole({ user }) {
   const [activeSubTab, setActiveSubTab] = useState('upload'); // 'upload', 'review', 'analytics'
   const [departments, setDepartments] = useState([]);
   
@@ -9,7 +9,7 @@ export default function AdminConsole() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedDeptId, setSelectedDeptId] = useState('1');
   const [uploading, setUploading] = useState(false);
-  const [uploadStep, setUploadStep] = useState(''); // 'parsing', 'gemini', 'done'
+  const [uploadStep, setUploadStep] = useState(''); // 'parsing', 'ai', 'done'
   const [extractionResult, setExtractionResult] = useState(null); // Metadata form for editing
 
   // Review Queue State
@@ -76,10 +76,11 @@ export default function AdminConsole() {
     const formData = new FormData();
     formData.append('pdf', selectedFile);
     formData.append('department_id', selectedDeptId);
+    formData.append('uploader_id', user?.id || 'u_admin');
 
     // Simulate AI pipeline step transitions visually
-    const geminiTimer = setTimeout(() => {
-      setUploadStep('gemini');
+    const aiTimer = setTimeout(() => {
+      setUploadStep('ai');
     }, 2500);
 
     try {
@@ -88,7 +89,7 @@ export default function AdminConsole() {
         body: formData
       });
 
-      clearTimeout(geminiTimer);
+      clearTimeout(aiTimer);
 
       if (!response.ok) {
         throw new Error('PDF upload and extraction pipeline failed.');
@@ -283,7 +284,7 @@ export default function AdminConsole() {
                   <div className="flex items-center gap-2 text-xs">
                     <Cpu className="w-4 h-4 text-emerald-400 animate-spin" />
                     <span className="font-bold text-slate-300">
-                      {uploadStep === 'parsing' ? 'Phase 1: Parsing Raw PDF Characters...' : 'Phase 2: Consulting Google Gemini for Context Metadata...'}
+                      {uploadStep === 'parsing' ? 'Phase 1: Parsing Raw PDF Characters...' : 'Phase 2: Consulting AI Engine for Context Metadata...'}
                     </span>
                   </div>
                   <div className="w-full bg-slate-950 rounded-full h-1.5 overflow-hidden">
@@ -382,7 +383,7 @@ export default function AdminConsole() {
                 <FileText className="w-10 h-10 text-slate-600" />
                 <h4 className="font-bold text-slate-350">Metadata Curating Terminal</h4>
                 <p className="text-xs text-slate-500 max-w-sm">
-                  Upload a PDF in the left tray. Our Node text extractor and Google Gemini AI engine will parse details and load them here for your final audit.
+                  Upload a PDF in the left tray. Our Node text extractor and Llama 3 AI engine will parse details and load them here for your final audit.
                 </p>
               </div>
             )}

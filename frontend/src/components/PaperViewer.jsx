@@ -3,35 +3,48 @@ import { X, FileText, Cpu, Download, Quote, Loader2, RefreshCw } from 'lucide-re
 import ResearchChat from './ResearchChat.jsx';
 
 export default function PaperViewer({ paper, onClose, onCite }) {
-  const [activeTab, setActiveTab] = useState('text'); // 'text' or 'summary'
+  const [activeTab, setActiveTab] = useState('text');
   const [summary, setSummary] = useState('');
-  const [loadingSummary, setLoadingSummary] = useState(false);
-  const [summaryError, setSummaryError] = useState(null);
+  const [studyGuide, setStudyGuide] = useState('');
+  const [quiz, setQuiz] = useState('');
+  const [flashcards, setFlashcards] = useState(null);
+  
+  const [loadingAi, setLoadingAi] = useState(false);
+  const [aiError, setAiError] = useState(null);
 
-  // Fetch Gemini summary on request or tab switch
-  const fetchSummary = async () => {
-    if (summary) return; // cache locally
-    setLoadingSummary(true);
-    setSummaryError(null);
+  const fetchAiContent = async (type) => {
+    if (type === 'summary' && summary) return;
+    if (type === 'study-guide' && studyGuide) return;
+    if (type === 'quiz' && quiz) return;
+    if (type === 'flashcards' && flashcards) return;
+
+    setLoadingAi(true);
+    setAiError(null);
 
     try {
-      const response = await fetch(`/api/research/${paper.id}/summary`);
-      if (!response.ok) {
-        throw new Error('Failed to retrieve AI summary from Gemini.');
-      }
+      const endpoint = type === 'summary' 
+        ? `/api/research/${paper.id}/summary`
+        : `/api/documents/${paper.id}/${type}`;
+        
+      const response = await fetch(endpoint);
+      if (!response.ok) throw new Error(`Failed to generate ${type}`);
       const data = await response.json();
-      setSummary(data.summary);
+      
+      if (type === 'summary') setSummary(data.summary);
+      if (type === 'study-guide') setStudyGuide(data.studyGuide);
+      if (type === 'quiz') setQuiz(data.quiz);
+      if (type === 'flashcards') setFlashcards(data.flashcards);
     } catch (err) {
-      console.error('Summary Fetch Error:', err);
-      setSummaryError(err.message || 'Failed to generate AI synthesis.');
+      console.error('AI Fetch Error:', err);
+      setAiError(err.message || 'Failed to generate AI content.');
     } finally {
-      setLoadingSummary(false);
+      setLoadingAi(false);
     }
   };
 
   useEffect(() => {
-    if (activeTab === 'summary') {
-      fetchSummary();
+    if (['summary', 'study-guide', 'quiz', 'flashcards'].includes(activeTab)) {
+      fetchAiContent(activeTab);
     }
   }, [activeTab]);
 
@@ -79,7 +92,7 @@ export default function PaperViewer({ paper, onClose, onCite }) {
         {/* LEFT WORKSPACE: READER & SUMMARY */}
         <div className="flex-1 flex flex-col border-r border-brand-border h-full overflow-hidden">
           {/* TAB BAR */}
-          <div className="flex items-center gap-2 p-4 border-b border-brand-border/40 bg-slate-900/20">
+          <div className="flex flex-wrap items-center gap-2 p-4 border-b border-brand-border/40 bg-slate-900/20">
             <button
               onClick={() => setActiveTab('text')}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
@@ -89,7 +102,7 @@ export default function PaperViewer({ paper, onClose, onCite }) {
               }`}
             >
               <FileText className="w-4 h-4 text-emerald-400" />
-              Parsed Document Text
+              Document Text
             </button>
 
             <button
@@ -100,8 +113,41 @@ export default function PaperViewer({ paper, onClose, onCite }) {
                   : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
               }`}
             >
-              <Cpu className="w-4 h-4 text-blue-400 animate-glow-pulse" />
-              Gemini AI Synthesis
+              <Cpu className="w-4 h-4 text-emerald-400" />
+              Summary
+            </button>
+
+            <button
+              onClick={() => setActiveTab('study-guide')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                activeTab === 'study-guide'
+                  ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+            >
+              Study Guide
+            </button>
+
+            <button
+              onClick={() => setActiveTab('quiz')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                activeTab === 'quiz'
+                  ? 'bg-purple-500/10 text-purple-400 border border-purple-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+            >
+              Quiz
+            </button>
+
+            <button
+              onClick={() => setActiveTab('flashcards')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                activeTab === 'flashcards'
+                  ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+            >
+              Flashcards
             </button>
           </div>
 
@@ -130,39 +176,45 @@ export default function PaperViewer({ paper, onClose, onCite }) {
                 </div>
               </article>
             ) : (
-              /* AI DEEP SUMMARY DISPLAY */
+              /* AI GENERATED CONTENT DISPLAY */
               <div className="space-y-6 animate-fade-in-up">
                 <div className="flex items-center justify-between pb-4 border-b border-brand-border/40">
                   <div className="flex items-center gap-2">
                     <Cpu className="w-5 h-5 text-emerald-400 animate-glow-pulse" />
-                    <h1 className="text-xl font-bold text-slate-200">Gemini Academic Deep Synthesis</h1>
+                    <h1 className="text-xl font-bold text-slate-200 capitalize">AI {activeTab.replace('-', ' ')}</h1>
                   </div>
                   
-                  {summary && (
+                  {['summary', 'study-guide', 'quiz', 'flashcards'].includes(activeTab) && (
                     <button
-                      onClick={() => { setSummary(''); fetchSummary(); }}
-                      disabled={loadingSummary}
+                      onClick={() => { 
+                        if (activeTab === 'summary') setSummary('');
+                        if (activeTab === 'study-guide') setStudyGuide('');
+                        if (activeTab === 'quiz') setQuiz('');
+                        if (activeTab === 'flashcards') setFlashcards(null);
+                        fetchAiContent(activeTab); 
+                      }}
+                      disabled={loadingAi}
                       className="p-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 border border-brand-border"
-                      title="Re-Generate Summary"
+                      title="Re-Generate"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${loadingSummary ? 'animate-spin' : ''}`} />
+                      <RefreshCw className={`w-3.5 h-3.5 ${loadingAi ? 'animate-spin' : ''}`} />
                     </button>
                   )}
                 </div>
 
-                {loadingSummary && (
+                {loadingAi && (
                   <div className="flex flex-col items-center justify-center py-20 space-y-4">
                     <Loader2 className="w-10 h-10 text-emerald-400 animate-spin" />
-                    <p className="text-xs text-slate-400 font-medium">Gemini is synthesizing document nodes... Please wait</p>
+                    <p className="text-xs text-slate-400 font-medium">Generating AI content... Please wait</p>
                   </div>
                 )}
 
-                {summaryError && (
+                {aiError && (
                   <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-2xl space-y-2">
                     <p className="text-xs text-red-400 font-bold">Generation failed</p>
-                    <p className="text-xs text-slate-400">{summaryError}</p>
+                    <p className="text-xs text-slate-400">{aiError}</p>
                     <button
-                      onClick={fetchSummary}
+                      onClick={() => fetchAiContent(activeTab)}
                       className="px-4 py-1.5 rounded-lg bg-slate-800 text-slate-200 text-xs font-semibold"
                     >
                       Retry
@@ -170,10 +222,22 @@ export default function PaperViewer({ paper, onClose, onCite }) {
                   </div>
                 )}
 
-                {summary && (
-                  <article className="prose prose-invert max-w-none text-slate-350 text-sm whitespace-pre-wrap leading-relaxed">
-                    {summary}
-                  </article>
+                {!loadingAi && !aiError && (
+                  <div className="prose prose-invert max-w-none text-slate-350 text-sm whitespace-pre-wrap leading-relaxed">
+                    {activeTab === 'summary' && summary}
+                    {activeTab === 'study-guide' && studyGuide}
+                    {activeTab === 'quiz' && quiz}
+                    {activeTab === 'flashcards' && flashcards && (
+                      <div className="grid grid-cols-1 gap-4">
+                        {Array.isArray(flashcards) ? flashcards.map((f, i) => (
+                          <div key={i} className="p-4 bg-slate-900/60 border border-brand-border rounded-xl">
+                            <p className="font-bold text-emerald-400 mb-2">Q: {f.front}</p>
+                            <p className="text-slate-300 border-t border-brand-border/40 pt-2">A: {f.back}</p>
+                          </div>
+                        )) : 'No flashcards generated.'}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             )}

@@ -104,7 +104,7 @@ export default function ResearchHub({ userRole, bookmarks, onToggleBookmark, onO
       setReviewResult(data.review);
     } catch (err) {
       console.error('Lit review error:', err);
-      setReviewResult('Synthesis failed. Please verify that the server is active and Gemini credentials are set.');
+      setReviewResult('Synthesis failed. Please verify that the server is active and AI credentials are set.');
     } finally {
       setGeneratingReview(false);
     }
@@ -132,7 +132,7 @@ export default function ResearchHub({ userRole, bookmarks, onToggleBookmark, onO
           </h2>
           
           <p className="text-xs md:text-sm text-slate-400 max-w-lg leading-relaxed">
-            Query paper abstracts or full texts. Use Google Gemini to summarize documents on-the-fly and chat with the publications.
+            Query paper abstracts or full texts. Use Llama 3 AI to summarize documents on-the-fly and chat with the publications.
           </p>
 
           {/* Search Inputs */}
@@ -278,7 +278,7 @@ export default function ResearchHub({ userRole, bookmarks, onToggleBookmark, onO
               <div className="flex items-center gap-2">
                 <Cpu className="w-5 h-5 text-blue-400 animate-glow-pulse" />
                 <div>
-                  <h2 className="text-lg font-bold text-slate-100">Gemini Comparative Literature Review</h2>
+                  <h2 className="text-lg font-bold text-slate-100">AI Comparative Literature Review</h2>
                   <p className="text-[10px] text-slate-400">Synthesized comparison regarding "{litReviewTopic}"</p>
                 </div>
               </div>
@@ -297,7 +297,7 @@ export default function ResearchHub({ userRole, bookmarks, onToggleBookmark, onO
               {generatingReview ? (
                 <div className="flex flex-col items-center justify-center py-20 space-y-4">
                   <Loader2 className="w-10 h-10 text-blue-400 animate-spin" />
-                  <p className="text-xs text-slate-400 font-medium">Gemini is structuring comparison matrices... This takes a moment.</p>
+                  <p className="text-xs text-slate-400 font-medium">AI is structuring comparison matrices... This takes a moment.</p>
                 </div>
               ) : (
                 <article className="prose prose-invert max-w-none text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">

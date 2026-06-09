@@ -41,7 +41,7 @@ export default function StudentDashboard({ user }) {
 
   // Chat
   const [messages, setMessages] = useState([
-    { sender: 'ai', text: `Hello ${user.name}! 👋 I'm your Campus AI Assistant powered by Gemini. Ask me anything about your uploaded course documents — timetables, assignments, exam schedules, and more!`, ts: new Date() }
+    { sender: 'ai', text: `Hello ${user.name}! 👋 I'm your Campus AI Assistant. Ask me anything about your uploaded course documents — timetables, assignments, exam schedules, and more!`, ts: new Date() }
   ]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -108,14 +108,15 @@ export default function StudentDashboard({ user }) {
         })
       });
       const data = await r.json();
+      // data.answer is present on both success AND friendly error responses
       setMessages(prev => [...prev, {
         sender: 'ai',
-        text: data.answer || 'Sorry, I could not find an answer.',
+        text: data.answer || data.error || 'Sorry, I could not generate a response. Please check the backend logs.',
         source: data.sourceDocument,
         ts: new Date()
       }]);
     } catch {
-      setMessages(prev => [...prev, { sender: 'ai', text: '❌ Connection error. Please ensure the backend is running.', ts: new Date() }]);
+      setMessages(prev => [...prev, { sender: 'ai', text: '❌ Connection error. Please ensure the backend server is running on port 5000.', ts: new Date() }]);
     } finally {
       setChatLoading(false);
     }
@@ -320,7 +321,7 @@ export default function StudentDashboard({ user }) {
                 <Cpu className="w-5 h-5 text-white animate-glow-pulse" />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-white">Gemini AI Assistant</h3>
+                <h3 className="text-sm font-bold text-white">Campus AI Assistant</h3>
                 <p className="text-[11px] text-emerald-400 font-medium">RAG-powered · Grounded in uploaded documents</p>
               </div>
             </div>
@@ -353,7 +354,12 @@ export default function StudentDashboard({ user }) {
                       })
                     });
                     const data = await r.json();
-                    setMessages(prev => [...prev, { sender: 'ai', text: data.answer || 'No answer found.', source: data.sourceDocument, ts: new Date() }]);
+                    setMessages(prev => [...prev, {
+                      sender: 'ai',
+                      text: data.answer || data.error || 'Sorry, I could not generate a response.',
+                      source: data.sourceDocument,
+                      ts: new Date()
+                    }]);
                   } catch {
                     setMessages(prev => [...prev, { sender: 'ai', text: 'Connection error. Please try again.', ts: new Date() }]);
                   } finally {
