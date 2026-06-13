@@ -12,6 +12,7 @@ import { uploadToSupabase } from './api/storage.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const path = require("path");
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 
@@ -1161,8 +1162,16 @@ app.put('/api/teacher/students/:id/approve', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-app.get("/", (req, res) => {
-  res.send("CMA-T2 Backend is Running Successfully 🚀");
+// Serve React frontend (Vite build)
+app.use(express.static(
+  path.join(__dirname, "../frontend/dist")
+));
+
+// React Router support
+app.get("*", (req, res) => {
+  res.sendFile(
+    path.join(__dirname, "../frontend/dist/index.html")
+  );
 });
 // Start server listener
 app.listen(PORT, () => {
