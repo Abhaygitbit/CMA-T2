@@ -1161,7 +1161,9 @@ app.put('/api/teacher/students/:id/approve', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
+app.get("/", (req, res) => {
+  res.send("CMA-T2 Backend is Running Successfully 🚀");
+});
 // Start server listener
 app.listen(PORT, () => {
   console.log(`=============================================================`);
